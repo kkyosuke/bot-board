@@ -7,8 +7,11 @@ AIエージェント向けの作業基準。詳細は各ドキュメントを参
 | ドキュメント | 内容 |
 | --- | --- |
 | [docs/development-workflow.md](docs/development-workflow.md) | 開発フロー、Subagentレビュー、ドキュメント規約 |
+| [docs/implementation-plan.md](docs/implementation-plan.md) | Phase 1〜3 のIssue分割マップ、依存順、受け入れ条件トレース |
+| [docs/architecture.md](docs/architecture.md) | 技術スタック、レイヤー境界、ディレクトリ構成、自動検証コマンド |
+| [docs/data-and-state.md](docs/data-and-state.md) | DBスキーマ、`Task` / `DecisionCard` 状態遷移、5秒取消・排他制御 |
+| [docs/bot-integration.md](docs/bot-integration.md) | Bot接続方針、MCPツール / Human API 契約、ワーカー・認可境界 |
 | [docs/concept.md](docs/concept.md) | 企画、UI要件、MVP、受け入れ条件（`UX-*` / `DEC-*` / `BOT-*`） |
-| [docs/bot-integration.md](docs/bot-integration.md) | データモデル、状態遷移、MCP/API契約、認可境界 |
 
 ## 必須ルール
 
