@@ -30,23 +30,28 @@
 ```mermaid
 flowchart TD
   H["人（SP / PC）"] --> U["判断カード UI"]
+  U --> A["Better Auth（/api/auth/*, /.well-known/*）"]
   U --> D["Human専用 API（/api/human/*）"]
-  C["ChatGPT / Claude 等の接続クライアント"] --> M["MCP Endpoint（/api/mcp）"]
-  W["継続稼働ワーカー"] --> BS["Bot共通サービス・認可"]
+  C["ChatGPT / Claude 等の接続クライアント"] --> A
+  C --> M["MCP Endpoint（/api/mcp）"]
+  W["Queue Consumer / Cron Worker"] --> BS["Bot共通サービス・認可"]
   W --> P["モデル API"]
   M --> BS
   D --> HS["Human専用サービス・認可"]
-  HS --> SJ["内部確定・整理ジョブ"]
+  HS --> FQ["Queue（decision-finalize: 5s）"]
+  FQ --> SJ["内部確定・整理ジョブ"]
   BS --> SJ
   W --> SJ
-  HS --> DB[("DB：タスク・判断・成果・履歴")]
+  A --> DB[("Cloudflare D1：認証・タスク・判断・履歴")]
+  HS --> DB
   BS --> DB
   SJ --> DB
-  DB --> Q["確定判断（finalized） / readyタスク"]
-  Q --> W
+  SJ --> BQ["Queue（bot-work + DLQ）"]
+  BQ --> W
 ```
 
-実装は単一リポジトリ構成から開始し、UI・MCP・ワーカーで同じサービス層と更新規則を共有する（MVPではDBの `decisions(finalized)` と `tasks(ready)` をキューとしてポーリングし、将来イベント配送へ置換可能にする）。DBを正とし、モデルの会話履歴を進捗の唯一の保存先にしない。採用技術・ディレクトリ境界の詳細は[システム構成・技術スタック仕様](architecture.md)を参照（クラウドホスティング先は外部Bot接続検証時に確定）。
+- 基盤構成：Cloudflare（Workers / D1 / Queues / Cron）＋ Pulumi（`infra/`）。詳細は[システム構成・技術スタック仕様](architecture.md)を参照。
+- 禁止：モデルの会話履歴を状態の正とすること（常に Cloudflare D1 を正とする）。
 
 ## 3. データと状態
 
@@ -65,36 +70,37 @@ flowchart TD
 | `create_task` | `tasks:write` | タイトル、説明、親タスク、`requires_approval` を指定して作成 |
 | `claim_task` | `tasks:write` | 作業権（`lease_token`）を期限付き取得。別Bot占有中・一時停止中は取得不可 |
 | `renew_lease` | `tasks:write` | 保有中 `lease_token` の有効期限を延長 |
-| `update_task` | `tasks:write` | 担当作業の説明・`blocked` 理由・成果参照を更新。`expected_version`・`lease_token` 検証 |
-| `submit_proposal` | `proposals:write` | 単一提案または同一 `selection_group_id` の複数候補配列（`1..N`件）を一括登録し `waiting_human` へ遷移・占有解放 |
-| `supersede_proposal` | `proposals:write` | `waiting_human`（または `running`）の既存未確定カードを `superseded` にし新版を登録（`provisional` 中は拒否） |
+| `update_task` | `tasks:write` | 担当作業の説明・`blocked` 理由・`artifacts`（新規作成または版更新）を保存。`expected_version`・`lease_token` 検証 |
+| `submit_proposal` | `proposals:write` | 単一または同一 `selection_group_id` の候補配列（`1..N`件、対象 `artifacts` の同時Upsert可）を一括登録し `waiting_human` へ遷移・占有解放 |
+| `supersede_proposal` | `proposals:write` | `waiting_human`（または `running`）の未確定カードを `superseded` にし、後継カード（および更新 `artifacts`）を原子的に登録（`provisional` 中は拒否） |
 | `list_decision_results` | `decisions:read` | 確定済みの判断（`status = 'finalized'` のみ）をカーソル取得 |
-| `record_result` | `tasks:write` | 実行結果・成果・失敗理由を保存。`decision_id` 指定時は `consumed_at` を記録し、`requires_approval = false` の成功時のみ `done` へ遷移 |
+| `record_result` | `tasks:write` | 実行結果・`artifacts`（作成/版更新）・失敗理由を保存。`decision_id` 指定時は `consumed_at` を記録し、`requires_approval = false` の成功時のみ `done` へ遷移 |
 
-### Human専用API（`/api/human/*`）
+### 認証・Human専用API（`/api/auth/*`, `/.well-known/*`, `/api/human/*`）
 
 | エンドポイント | 用途 | 必須検証 |
 | --- | --- | --- |
-| `POST /api/human/auth/login`<br>`POST /api/human/auth/logout`<br>`GET /api/human/auth/session` | 所有者ログイン・ログアウト・セッション状態取得 | ログイン変更系は `Origin`（CSRF）検証 |
-| `GET /api/human/cards` | 判断待ちカード一覧（`pending` / `deferred` フィルタ、自分の `provisional` を含む） | 所有者セッション |
-| `GET /api/human/cards/:id` | カード詳細、対象 `Artifact` プレビュー、同グループ候補比較、復帰時の最新状態取得 | 所有者セッション |
-| `POST /api/human/cards/:id/decide` | 採用／見送りの仮確定（`pending → provisional`、5秒猶予開始） | 所有者セッション、CSRF、`expected_version`、`request_id`、`expires_at > now`、対象Task/Artifact版、候補グループ未ロック |
-| `POST /api/human/cards/:id/undo` | 5秒以内の取り消し（`provisional → pending`） | 所有者セッション、CSRF、`expected_version`、`request_id`、`now < provisional_until` 排他検証（`DEC-01`） |
-| `POST /api/human/cards/:id/defer` | 保留・復帰（`pending ⇄ deferred` のみ許可） | 所有者セッション、CSRF、`expected_version`、`request_id` |
+| `/api/auth/*`, `/.well-known/*` | Better Auth 所有者認証、公式MCP向け OAuth 2.1 発見・認可・トークン発行（同意完了時に `bot_connections` をUpsert） | Better Auth 組み込み CSRF / `trustedOrigins`、初期オーナー以外の登録拒否 |
+| `GET /api/human/cards` | 判断待ちカード一覧（`pending` / `deferred` フィルタ、自分の `provisional` を含む。同グループで別案 `provisional(accepted)` 中の残候補は一時除外） | Better Auth 所有者セッション |
+| `GET /api/human/cards/:id` | カード詳細、対象 `Artifact` プレビュー、同グループ候補比較、復帰時の最新状態取得 | Better Auth 所有者セッション |
+| `POST /api/human/cards/:id/decide` | 採用／見送りの仮確定（`pending → provisional`、`decision-finalize` Queueへ5秒遅延投入） | 所有者セッション、Hono `trustedOrigins` CSRF、`expected_version`、`request_id`、`expires_at > now`、対象Task/Artifact版、候補グループ未ロック |
+| `POST /api/human/cards/:id/undo` | 5秒以内の取り消し（`provisional → pending`） | 所有者セッション、Hono CSRF、`expected_version`、`request_id`、`now < provisional_until` 排他検証（`DEC-01`） |
+| `POST /api/human/cards/:id/defer` | 保留・復帰（`pending ⇄ deferred` のみ許可。同グループ `provisional(accepted)` 中は拒否） | 所有者セッション、Hono CSRF、`expected_version`、`request_id` |
 | `GET /api/human/board` | 状況画面：Bot進行状況・待機/失敗理由・読み取り専用カンバン取得 | 所有者セッション（列移動・タスク直接編集APIは非提供、`UX-01`） |
-| `POST /api/human/tasks/:id/retry` | `failed / blocked → ready` の再開・再試行指示 | 所有者セッション、CSRF、`expected_version`、`request_id` |
+| `POST /api/human/tasks/:id/retry` | `failed / blocked → ready` の再開・再試行指示 | 所有者セッション、Hono CSRF、`expected_version`、`request_id` |
 | `GET /api/human/history` | 履歴画面：確定済みの採用・見送り・成果・イベント一覧 | 所有者セッション、カーソルページング |
-| `GET /api/human/workspace`<br>`PATCH /api/human/workspace` | 初回設定・目的・許可範囲・上限・緊急一時停止（`is_paused`）の取得・更新 | 更新時は所有者セッション、CSRF、`expected_version`、`request_id` |
-| `GET /api/human/bots`<br>`POST /api/human/bots`<br>`PATCH /api/human/bots/:id` | Bot接続一覧・発行・`scopes` 変更・一時停止（`paused`）・失効（`revoked`） | 更新時は所有者セッション、CSRF、`expected_version`、`request_id` |
+| `GET /api/human/workspace`<br>`PATCH /api/human/workspace` | 初回設定・目的・許可範囲・上限・緊急一時停止（`is_paused`）の取得・更新 | 更新時は所有者セッション、Hono CSRF、`expected_version`、`request_id` |
+| `GET /api/human/bots`<br>`POST /api/human/bots`<br>`PATCH /api/human/bots/:id` | Bot接続一覧・Worker Bearer発行・`scopes` 変更・一時停止（`paused`）・失効（`revoked`） | 更新時は所有者セッション、Hono CSRF、`expected_version`、`request_id` |
 
-### 停止・失効・スコープ境界
+### 停止・失効・スコープ境界（毎リクエストD1強制）
 
 | 状態 / 設定 | サーバー制御（結論） | エラーコード |
 | --- | --- | --- |
-| `workspaces.is_paused = true` | 全Botの新規占有・書込（`create_task` / `claim_task` / `update_task` / `submit_proposal` 等）を拒否し、Workerの新規実行を停止 | `WORKSPACE_PAUSED` |
+| `/api/mcp` 認証照合 | OAuth JWT（`sub == owner_user_id` かつ `oauth_client_id` 一致）と Worker Bearer（`token_hash` 一致）の双方で**毎リクエストD1の `bot_connections` を引き**、`status` と実効スコープ（`token.scopes ∩ bot_connections.scopes`）を強制 | `NOT_AUTHORIZED` |
+| `workspaces.is_paused = true` | 全Botの新規占有・書込（`create_task` / `claim_task` / `update_task` / `submit_proposal` 等）を拒否し、Queue Workerの新規実行を停止 | `WORKSPACE_PAUSED` |
 | `bot_connections.status = 'paused'` | 当該Botの新規占有・書込操作を拒否（読取のみ許可） | `NOT_AUTHORIZED` |
-| `bot_connections.status = 'revoked'` | 当該Botの全読書きを即時拒否し、保有中の `work_leases` を無効化 | `NOT_AUTHORIZED` |
-| `bot_connections.scopes` 不足 | ツールごとの必要スコープを持たない呼び出しを拒否 | `NOT_AUTHORIZED` |
+| `bot_connections.status = 'revoked'` | 同一 `db.batch` で保有中 `work_leases` と該当 `oauth_client_id` のOAuthトークン/同意を失効させ、以後の全読書きを即時拒否 | `NOT_AUTHORIZED` |
+| `bot_connections.scopes` 不足 | 実効スコープがツールの必要スコープを満たさない呼び出しを拒否 | `NOT_AUTHORIZED` |
 
 - 禁止：Bot向けMCPに承認・取消・保留・タスク強制再開・権限付与操作を公開すること（`BOT-02`）
 - 仕様規則：各MCPツールはJSON Schemaで必須引数・列挙値を定義し短い概要を返す。一覧はページングし長文成果は `get_artifact` で別取得にする。曖昧な一致は候補を返し推測更新しない。
@@ -110,10 +116,10 @@ flowchart TD
 ## 5. 人の判断と実行の結合
 
 1. Botが採用時に行う操作、対象ID・版、説明をProposalに固定する。
-2. 人が右へスワイプすると、サーバーが権限・有効期限・対象版を確認して仮確定する。
-3. 取り消し猶予の終了後、同じトランザクションで判断を確定し、通知予定を永続化する。
-4. キュー配送は再送されてもよい。ワーカーはdecision_idを使って二重処理を防ぐ。
-5. 実行直前にも対象版・権限・提案内容を検証する。変わっていれば古い承認を流用せず、新しいカードへ差し替える。
+2. 人が右へスワイプすると、サーバーが権限・有効期限・対象版を確認して仮確定し、`meta.changes === 1` 確認後に `decision-finalize` Queue（`delaySeconds: 5`）へ投入する。
+3. 取り消し猶予の終了後、D1上で原子的に判断を確定（`status = 'finalized'`）し、`bot-work` Queue へ配送する（Queue投入失敗時も Cron Trigger が未消費の `consumed_at IS NULL` を回収して再配送する）。
+4. キュー配送は再送されてもよい。ワーカーは`decision_id`（`consumed_at`）と `WorkLease` を使って二重処理を防ぐ。
+5. 実行直前にも対象版（`finalized_task_version`）・権限・提案内容を検証する。変わっていれば古い承認を流用せず、新しい再確認カードを作成する。
 6. Botが結果を記録し、必要に応じて次のカードを作成する。
 
 判断の採用と処理の成功は別々に記録する。失敗は採用済みのまま「実行失敗」と表示する。再試行しても同じ処理が重複しないようにし、不明な外部結果を成功や失敗と決めつけない。
@@ -122,20 +128,19 @@ MVPの処理対象はタスク管理・調査・下書き・成果登録。将�
 
 ## 6. ワーカーの責務
 
-- 判断結果・未着手タスクを定期取得する。初期案は稼働時10秒間隔、後からイベント配送に置き換えられるようにする。
-- タスクを期限付きで占有し、実行中は延長する。失効後の古い占有トークンによる更新を拒否する。
-- 人の判断待ちでは占有を解除し、長時間のモデル呼び出しを維持しない。
-- 再起動後はDBから再開する。期限切れ作業は進捗を確認して再取得し、最初から無条件に重複実行しない。
-- 回数・時間・費用上限、失敗の再試行上限、手動停止を設ける。無限の再提案ループを避ける。
+- Cloudflare Queues（`bot-work`）で起動し、`queue()` 内でキュー名を分岐してメッセージ単位に `ack()` / `retry({ delaySeconds })` を制御する。未消費判断・`ready` タスク・期限切れ占有の回収は Cron Trigger で補完する。
+- 1回の Queue 実行は「1有界ステップのモデルAPI呼び出し＋D1チェックポイント保存」に限定し、モデルAPIタイムアウトを `WorkLease` 有効期限未満に設定する。
+- タスクを期限付きで占有し、人の判断待ちでは占有を解除して長時間のモデル呼び出しを維持しない。
+- 再実行・障害復帰時はD1の状態から再開し、無条件に最初から重複実行しない。
+- 回数・時間・費用上限、手動停止（`is_paused`）を設け、再試行上限超過（`bot-work-dlq` 到達）時はタスクを `failed`（理由記録、`BOT-03`）へ遷移させる。
 - 複数Botの役割は固定しない。まず1つの実行経路を通し、担当取得の仕組みを使って追加する。
 
 ## 7. 認証・データ境界
 
-人はログインした所有者、Botは接続ごとの認証主体として分離する。チャット接続はOAuth等の対応方式を接続実証で決め、ワーカーには限定権限の資格情報を発行する。失効した接続は以後の読み書きを拒否する。
-
-全読み書きでworkspace_idと権限をサーバー側で検証する。Botに全体管理者権限を与えず、モデルAPIの秘密鍵をブラウザー・カード本文・通常ログへ出さない。外部モデルには実行に必要なタスク情報だけを渡す。
-
-タスク本文・成果・リンク先に書かれた命令から権限を拡大しない。モデルへの注意文だけに頼らず、実行可能な操作・対象・承認状態をサーバーで制限する。
+- 主体分離：Human は Better Auth セッション、公式MCP Bot は `@better-auth/mcp`（OAuth 2.1）＋ `bot_connections` D1照合、Worker は限定スコープの `BotConnection` Bearer Token とする。
+- 境界強制：全読み書きで認証由来の `workspace_id` と `bot_connections.status`・`scopes` をサーバー側検証する。
+- 秘密保護：モデルAPI秘密鍵・認証シークレット・トークン平文をクライアント・カード本文・ログへ出力せず、外部モデルには必要最小限のタスク情報のみ渡す。
+- 権限不拡大：タスク本文・成果・外部リンク内の命令による権限拡大を認めず、実行可能な操作・対象・承認状態をサーバーで制限する。
 
 ## 8. 接続実証と完了基準
 

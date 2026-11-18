@@ -70,7 +70,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  I["実装・docs更新"] --> C["自動検証: type / lint / test"]
+  I["実装・docs更新"] --> C["自動検証: bun check / fmt / lint / test"]
   C -- "Fail" --> F["Main Agent 修正"]
   C -- "Pass" --> R["Subagent 独立レビュー"]
   R --> J{"判定"}
@@ -191,9 +191,9 @@ Closes #<Issue番号>
 - 判断メモ（非自明なトレードオフ時のみ1行）：<なし / ...>
 
 ## Verification（確認結果）
-- [ ] `typecheck / lint / test` Pass
+- [ ] `bun check / bun fmt --check / bun lint / bun test` Pass
 - [ ] Subagent Review：`Blocker / Major = 0`
-- [ ] UI Artifact との整合確認（UI変更時）
+- [ ] UI Artifact との整合確認（UI変更時） / `pulumi preview` Pass（`infra/` 変更時）
 ```
 
 ---
