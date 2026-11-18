@@ -1,0 +1,216 @@
+# AI開発フロー・ドキュメント規約
+
+作成日：2026-11-18 ／ 状態：運用基準
+
+## 1. 全体フロー
+
+```mermaid
+flowchart TD
+  S1["1. Issue作成（Scope・設計・AC）"] --> UI{"UI変更あり?"}
+  UI -- "Yes" --> S2["2. ArtifactでUI試作"]
+  UI -- "No" --> G1["3. Human確認（Gate 1）"]
+  S2 --> G1
+  G1 -- "差し戻し" --> S1
+  G1 -- "合意" --> S4["4. docs/・実装・テスト更新"]
+  S4 --> S5["5. Subagentレビュー・修正ループ"]
+  S5 --> S6["6. PR作成"]
+  S6 --> G2["7. Human最終確認・Merge（Gate 2）"]
+```
+
+| # | 工程 | 主担当 | 成果物 | 完了条件（Exit Gate） |
+| --- | --- | --- | --- | --- |
+| 1 | Issue・設計 | Main Agent | GitHub Issue | Scope・設計図・AC・1行ガードレールが図表で明記 |
+| 2 | UI試作（UI変更時） | Main Agent | Artifact（HTML / 画像） | 通常・0件・読込・Bot実行中/未接続・失敗、SP（360/320px）＋PC代替操作を再現（UI変更なし時はIssue明記でスキップ） |
+| 3 | 設計・UI確認 | **Human** | 合意コメント | 設計（＋UI変更時はArtifact）の合意完了 |
+| 4 | Doc・実装 | Main Agent | `docs/`・Code・Test | 仕様書（結論・状況）と実装・テストが同時更新 |
+| 5 | 自律レビュー | **Subagent** × Main | 修正済ブランチ | 自動検証Pass ＋ Subagent指摘 `Blocker / Major = 0`（最大3回） |
+| 6 | PR作成 | Main Agent | GitHub PR | 結論・状況・検証結果のみを記載し提出 |
+| 7 | 最終確認・Merge | **Human** | Merge Commit | 差分・検証結果を確認し Merge |
+
+- 禁止：Gate 1 合意前の本実装着手
+- 禁止：GitHub Issues 無効のまま本実装へ進むこと（先にHumanへ有効化を依頼。本フロー定義PRのみ例外）
+
+---
+
+## 2. 役割分担と進行シーケンス
+
+```mermaid
+sequenceDiagram
+  actor H as Human
+  participant M as Main Agent
+  participant A as UI Artifact
+  participant S as Review Subagent
+  participant G as GitHub
+
+  M->>G: 1. Issue起票（1 Issue = 1 PR の縦切り）
+  opt UI変更あり
+    M->>A: 2. 画面・操作プロトタイプ出力
+  end
+  M->>H: 3. Issue（＋UI変更時はArtifact）の確認依頼（Gate 1）
+  alt 差し戻し
+    H-->>M: 修正指示（1〜2へ戻る）
+  else 合意
+    H-->>M: OK
+    M->>M: 4. docs/ 更新 + コード・テスト実装
+    loop 最大3回（Blocker / Major = 0 まで）
+      M->>S: 5. 別コンテキストで独立レビュー依頼
+      S-->>M: 指摘事項（Blocker / Major / Minor）
+      M->>M: 修正・再検証
+    end
+    M->>G: 6. PR作成（結論・状況・検証結果のみ）
+    H->>G: 7. 最終確認・Merge（Gate 2）
+  end
+```
+
+---
+
+## 3. Subagent レビュー・修正ループ
+
+- ルール：実装した Main Agent とは**別コンテキストの Subagent** で検証する（最大3回反復・超過時はHumanへエスカレーション）。
+
+```mermaid
+flowchart LR
+  I["実装・docs更新"] --> C["自動検証: type / lint / test"]
+  C -- "Fail" --> F["Main Agent 修正"]
+  C -- "Pass" --> R["Subagent 独立レビュー"]
+  R --> J{"判定"}
+  J -- "仕様未決 / 3回超過" --> H["Humanへ判断依頼"]
+  H -- "方針確定" --> F
+  J -- "Blocker / Major あり" --> F
+  F --> C
+  J -- "Blocker / Major = 0" --> P["PR Ready"]
+```
+
+### 重大度（Severity）基準
+
+| 重大度 | 定義 | PR可否 |
+| --- | --- | :---: |
+| **Blocker** | 仕様矛盾、認可・データ境界破り、型・テスト失敗、描画・操作不能 | 不可 |
+| **Major** | AC未達、競合・異常系漏れ、`docs/` 未更新または実装との乖離 | 不可 |
+| **Minor** | 軽微な表現・構造改善提案 | 可（任意対応） |
+
+### レビュー観点一覧
+
+| レビュー観点 | チェック項目 | 合格基準 |
+| --- | --- | --- |
+| **Spec / Doc整合** | IssueのAC・[企画・要件書](concept.md)・[Bot連携・状態設計](bot-integration.md)との一致、`docs/`更新漏れ | 仕様乖離 0・Doc未更新 0 |
+| **Security / 境界** | 人専用APIとBot用MCPの分離、`workspace_id`・占有ロック・版検証（`BOT-02`, `DEC-02`） | 権限バイパス・競合漏れ 0 |
+| **Code / Test** | 型・Lint・単体/結合テスト、異常系・5秒取消・Bot再開・再試行（`DEC-01`〜`04`, `BOT-01`, `BOT-03`） | 全自動テスト Pass |
+| **UI / UX**（UI変更時） | Artifact一致、SP操作域（44px以上）・PC代替操作、縦スクロール誤判定防止（`UX-01`〜`05`） | 表示崩れ・操作欠落 0 |
+
+---
+
+## 4. ドキュメント規約：「結論・状況のみ」の原則
+
+> **結論：`docs/` には「結論（現行仕様）」「状況（現在地）」「1行ガードレール（禁止事項）」のみを書く。変更経緯・議論ログは書かない。**
+
+### 「結論・状況のみ」にするかどうかの整理（AI開発における扱い）
+
+| 項目 | 要否 | AI開発での扱い・影響 |
+| --- | :---: | --- |
+| **結論＋状況** | **必須** | 現行仕様と `未実装 / 実装済 / 検証済` の境界を固定し、推測実装や「対応済」誤記を防止 |
+| **変更経緯・旧案** | **不要（有害）** | 旧仕様が残るとAIが現行仕様と誤認して再実装するため削除（履歴は `git log` / PRへ分離） |
+| **変更理由（背景）** | **原則不要（例外のみ変換）** | 長文理由は不要。ただし非自明な制約まで消すとAIがリファクタで破壊するため、**`禁止：〜` の1行ガードレール**に変換して `docs/` に残す（トレードオフ根拠は必要時のみ Issue / PR に1行） |
+
+- 既存初稿（[concept.md](concept.md) / [bot-integration.md](bot-integration.md)）の更新ルール：対象Issueのスコープ該当箇所のみ、合意・実装に合わせて「提案散文 → 確定仕様（図表＋状況＋1行ガードレール）」へ段階置換する（スコープ外の章は一括改稿しない）。
+
+### 情報の振り分けフロー
+
+```mermaid
+flowchart TD
+  Q1{"現行の仕様・状態か?"}
+  Q1 -- "Yes" --> D1["docs/ に図・表で記載（結論・状況）"]
+  Q1 -- "No" --> Q2{"破ると壊れる禁止事項・不変条件か?"}
+  Q2 -- "Yes" --> D2["docs/ に1行で記載（ガードレール）"]
+  Q2 -- "No" --> Q3{"非自明なトレードオフ判断か?"}
+  Q3 -- "Yes" --> D3["PR / Issue に1行で記録"]
+  Q3 -- "No（変更経緯・試行錯誤）" --> D4["書かない（Git履歴で代替）"]
+```
+
+### 媒体別の記述マトリクス
+
+| 情報の種類 | `docs/*.md` | Issue | Artifact | PR | ルール |
+| --- | :---: | :---: | :---: | :---: | --- |
+| **結論**（現行仕様・構造・I/O） | ◎ | ◎ | ◎（UI） | ○（差分） | 図・表を優先 |
+| **状況**（未実装 / 実装済 / 検証済） | ◎ | ◎ | - | ◎ | 未検証を「対応済」にしない |
+| **ガードレール**（禁止事項・境界条件） | ○ | ○ | - | - | 非自明な制約のみ1行で記載 |
+| **判断理由**（トレードオフの選択根拠） | × | △ | - | ○ | 必要な場合のみPR/Issueに1行 |
+| **変更経緯**（旧案・試行錯誤・修正履歴） | × | × | × | × | 書かない（`git log` を参照） |
+
+### 記述例（NG / OK 対比）
+
+| 区分 | 例 |
+| --- | --- |
+| **NG**（経緯・長文） | 当初はスワイプ直後に確定してBotを動かす想定だったが、スマホでの誤スワイプが懸念されたため議論の結果5秒間の取り消し猶予を設けることに変更した。そのため仮確定の間はBotが動かないように注意する必要がある。 |
+| **OK**（結論・状況・ガードレール） | 状態：`pending ⇄ provisional(5s) → accepted / declined`（未実装・5s以内取消で `pending` 復帰）<br>禁止：`provisional` 中のBot着手・外部実行（`DEC-01`） |
+
+### 視覚化フォーマット基準（日本語最小化）
+
+| 表現対象 | 使用フォーマット | 避ける表現 |
+| --- | --- | --- |
+| 分岐・処理フロー・全体構成 | `mermaid` (`flowchart TD / LR`) | 順序を説明する長文段落 |
+| 役割間の通信・時系列 | `mermaid` (`sequenceDiagram`) | 主語が入れ替わる文章 |
+| エンティティの状態遷移 | `mermaid` (`stateDiagram-v2`) | 矢印テキストの羅列・文章説明 |
+| 仕様項目・権限・比較・状況一覧 | Markdown Table | 箇条書きの長文化 |
+| 補足ルール・禁止事項 | 1行箇条書き（体言止め・短文） | 背景説明・接続詞の多用 |
+
+---
+
+## 5. Issue / PR 最小テンプレート
+
+### Issue（設計・スコープ定義）
+
+```markdown
+## Goal / Status
+- 結論：<1行で到達状態>
+- 対象AC：`UX-01`, `DEC-01`（基盤タスク時は完了条件を1行記載）
+
+## Scope
+| In（やること） | Out（やらないこと） |
+| --- | --- |
+| ... | ... |
+
+## Design
+<Mermaid 図 + I/O・状態の表 + 1行ガードレール>
+
+## UI Artifact
+- <Artifact リンク / UI変更なし>
+```
+
+### Pull Request（結果・検証報告）
+
+```markdown
+Closes #<Issue番号>
+
+## Changes（結論）
+| 対象 | 変更内容 | 状態 |
+| --- | --- | --- |
+| `docs/...` | ... | 更新済 |
+| `src/...` | ... | 実装済 |
+
+- 判断メモ（非自明なトレードオフ時のみ1行）：<なし / ...>
+
+## Verification（確認結果）
+- [ ] `typecheck / lint / test` Pass
+- [ ] Subagent Review：`Blocker / Major = 0`
+- [ ] UI Artifact との整合確認（UI変更時）
+```
+
+---
+
+## 6. 現在の状況と開始ステップ
+
+```mermaid
+flowchart LR
+  P0["Phase 0: Issues有効化 → 技術選定Issue"] --> P1["Phase 1: 連携の小規模検証"]
+  P1 --> P2["Phase 2: スワイプUI試作"]
+  P2 --> P3["Phase 3: 判断〜Bot再開の縦通し"]
+```
+
+| 項目 | 状況 | 次のアクション |
+| --- | --- | --- |
+| 企画・要件（[concept.md](concept.md)） | 初稿（設計提案） | Issue単位で実装スコープへ分割・確定仕様へ段階置換 |
+| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 初稿（設計提案） | DB・フレームワーク・MCP構成の選定Issue作成 |
+| AI開発フロー（本書） | 運用基準（定義済） | Phase 0 以降の全変更に適用 |
+| GitHub Issues 設定 | 無効（`disabled`） | リポジトリ設定で Issues を有効化 |
+| アプリ本体・Bot接続 | 未実装 | Phase 0 完了後、Phase 1 の Issue 起票から開始 |

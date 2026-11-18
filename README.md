@@ -6,5 +6,7 @@ Botがタスクを管理し、人は判断カードをスワイプして選択�
 
 - [企画・要件書](docs/concept.md)：体験、画面構成、MVP、受け入れ条件
 - [Bot連携・状態設計](docs/bot-integration.md)：対象Bot、操作契約、承認と実行の関係
+- [AI開発フロー・ドキュメント規約](docs/development-workflow.md)：Issue駆動手順、Subagentレビュー、記述基準
+- [AIエージェント作業基準](AGENTS.md)：エージェント向け参照先と必須ガードレール
 
 対象は ChatGPT / Muse / Grok / Claude。Museの正式なサービスは確認待ちです。
