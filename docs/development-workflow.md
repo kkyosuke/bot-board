@@ -93,7 +93,7 @@ flowchart LR
 
 | レビュー観点 | チェック項目 | 合格基準 |
 | --- | --- | --- |
-| **Spec / Doc整合** | IssueのAC・[企画・要件書](concept.md)・[Bot連携・状態設計](bot-integration.md)との一致、`docs/`更新漏れ | 仕様乖離 0・Doc未更新 0 |
+| **Spec / Doc整合** | IssueのAC・[企画・要件書](concept.md)・[システム構成](architecture.md)・[データ・状態遷移](data-and-state.md)・[Bot連携・状態設計](bot-integration.md)との一致、`docs/`更新漏れ | 仕様乖離 0・Doc未更新 0 |
 | **Security / 境界** | 人専用APIとBot用MCPの分離、`workspace_id`・占有ロック・版検証（`BOT-02`, `DEC-02`） | 権限バイパス・競合漏れ 0 |
 | **Code / Test** | 型・Lint・単体/結合テスト、異常系・5秒取消・Bot再開・再試行（`DEC-01`〜`04`, `BOT-01`, `BOT-03`） | 全自動テスト Pass |
 | **UI / UX**（UI変更時） | Artifact一致、SP操作域（44px以上）・PC代替操作、縦スクロール誤判定防止（`UX-01`〜`05`） | 表示崩れ・操作欠落 0 |
@@ -202,15 +202,16 @@ Closes #<Issue番号>
 
 ```mermaid
 flowchart LR
-  P0["Phase 0: Issues有効化 → 技術選定Issue"] --> P1["Phase 1: 連携の小規模検証"]
-  P1 --> P2["Phase 2: スワイプUI試作"]
-  P2 --> P3["Phase 3: 判断〜Bot再開の縦通し"]
+  P1["Phase 1: 連携の小規模検証（S1〜S4）"] --> P2["Phase 2: スワイプUI試作（S5〜S6）"]
+  P2 --> P3["Phase 3: 判断〜Bot再開の縦通し（S7〜S8）"]
 ```
 
 | 項目 | 状況 | 次のアクション |
 | --- | --- | --- |
-| 企画・要件（[concept.md](concept.md)） | 初稿（設計提案） | Issue単位で実装スコープへ分割・確定仕様へ段階置換 |
-| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 初稿（設計提案） | DB・フレームワーク・MCP構成の選定Issue作成 |
-| AI開発フロー（本書） | 運用基準（定義済） | Phase 0 以降の全変更に適用 |
-| GitHub Issues 設定 | 無効（`disabled`） | リポジトリ設定で Issues を有効化 |
-| アプリ本体・Bot接続 | 未実装 | Phase 0 完了後、Phase 1 の Issue 起票から開始 |
+| 企画・要件（[concept.md](concept.md)） | 初稿（設計提案） | Phase 2 実装時にUI状態・確定事項を段階置換 |
+| システム構成（[architecture.md](architecture.md)） | 構成基準（未実装） | `S1` でリポジトリ初期化 |
+| データ・状態遷移（[data-and-state.md](data-and-state.md)） | 設計基準（未実装） | `S1`〜`S3` でスキーマ・状態遷移を実装 |
+| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 設計基準（未実装） | `S2`〜`S4` でMCP・Human API・接続実証を実施 |
+| 実装計画（[implementation-plan.md](implementation-plan.md)） | 計画基準（未実装） | `S1` から順にGitHub Issueを起票して進行 |
+| AI開発フロー（本書） | 運用基準（定義済） | 全変更に適用 |
+| GitHub Issues 設定 | 有効（`enabled`） | 準備完了 |
