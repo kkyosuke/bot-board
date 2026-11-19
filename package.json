@@ -1,0 +1,21 @@
+{
+  "name": "bot-board",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "bun check",
+    "fmt": "bun fmt",
+    "fmt:check": "bun fmt --check",
+    "lint": "bun lint",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "test": "bun test",
+    "verify": "bun fmt --check && bun lint && bun check && bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4"
+  },
+  "engines": {
+    "bun": ">=1.4.6-0"
+  }
+}

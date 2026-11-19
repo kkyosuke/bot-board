@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  BUN_NPM_VERSION: "1.4.5-canary.20261119.1"
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Bun toolchain
+        run: |
+          npm install -g --prefix "$HOME/.local" --allow-scripts=bun "bun@${BUN_NPM_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/bun" --revision
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Check formatting
+        run: bun fmt --check
+      - name: Run linter
+        run: bun lint
+      - name: Check TypeScript types
+        run: bun check
+      - name: Run test suite
+        run: bun test
