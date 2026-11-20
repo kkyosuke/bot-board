@@ -493,6 +493,126 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
     expect((await sqliteDb.orm.select().from(schema.workspaces).all()).length).toBe(0);
   });
 
+  test("bootstraps first-time owner via GET /api/auth/callback/github (including private email /user/emails fallback) and authorizes /api/human/workspace (m3)", async () => {
+    const { sqliteDb, workerFetch } = await setupEnv({ seedOwner: false });
+
+    const startRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-in/social`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          provider: "github",
+          callbackURL: `${ORIGIN}/`,
+          errorCallbackURL: `${ORIGIN}/sign-in`,
+        }),
+      }),
+    );
+    expect(startRes.status).toBe(200);
+    const ghAuthUrl = new URL(readStr(toRecord(await startRes.json()), "url"));
+    const state = ghAuthUrl.searchParams.get("state") ?? "";
+    expect(state).not.toBe("");
+
+    const rawSetCookies =
+      typeof startRes.headers.getSetCookie === "function" ? startRes.headers.getSetCookie() : [];
+    const cookieHeader = rawSetCookies
+      .map((entry) => entry.split(";")[0]?.trim() ?? "")
+      .filter((pair) => pair !== "")
+      .join("; ");
+
+    const originalFetch = globalThis.fetch;
+    const mockedFetch = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const urlStr =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (urlStr.startsWith("https://github.com/login/oauth/access_token")) {
+          return new Response(
+            JSON.stringify({
+              access_token: "gho_owner_valid_token",
+              token_type: "bearer",
+              scope: "read:user,user:email",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (urlStr === "https://api.github.com/user") {
+          return new Response(
+            JSON.stringify({
+              id: Number(OWNER_GITHUB_ID),
+              login: "sole-owner-gh",
+              name: "Sole Owner",
+              email: null, // Exercises GitHub private email /user/emails fallback
+              avatar_url: "https://avatars.githubusercontent.com/u/777001",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (urlStr === "https://api.github.com/user/emails") {
+          return new Response(
+            JSON.stringify([
+              { email: "owner-private@example.test", primary: true, verified: true },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return await originalFetch(input, init);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    let sessionCookieHeader: string;
+    globalThis.fetch = mockedFetch;
+    try {
+      const cbRes = await workerFetch(
+        new Request(
+          `${ORIGIN}/api/auth/callback/github?code=gh_owner_code_1&state=${encodeURIComponent(state)}`,
+          {
+            method: "GET",
+            headers: cookieHeader !== "" ? { Cookie: cookieHeader } : {},
+          },
+        ),
+      );
+      expect(cbRes.status).toBe(302);
+      const location = cbRes.headers.get("Location") ?? "";
+      const redirectUrl = new URL(location, ORIGIN);
+      expect(redirectUrl.origin).toBe(ORIGIN);
+      expect(redirectUrl.pathname).toBe("/");
+      expect(cbRes.headers.get("Cache-Control")).toBe("no-store");
+
+      const cbCookies =
+        typeof cbRes.headers.getSetCookie === "function" ? cbRes.headers.getSetCookie() : [];
+      sessionCookieHeader = cbCookies
+        .map((entry) => entry.split(";")[0]?.trim() ?? "")
+        .filter((pair) => pair.includes("session_token="))
+        .join("; ");
+      expect(sessionCookieHeader).toContain("session_token=");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const users = await sqliteDb.orm.select().from(schema.user).all();
+    const accounts = await sqliteDb.orm.select().from(schema.account).all();
+    const sessions = await sqliteDb.orm.select().from(schema.session).all();
+    const workspaces = await sqliteDb.orm.select().from(schema.workspaces).all();
+    expect(users.length).toBe(1);
+    expect(users[0]?.email).toBe("owner-private@example.test");
+    expect(accounts.length).toBe(1);
+    expect(accounts[0]?.accountId).toBe(OWNER_GITHUB_ID);
+    expect(sessions.length).toBe(1);
+    expect(workspaces.length).toBe(1);
+
+    const wsRes = await workerFetch(
+      new Request(`${ORIGIN}/api/human/workspace`, {
+        headers: { Cookie: sessionCookieHeader },
+      }),
+    );
+    expect(wsRes.status).toBe(200);
+    const wsJson = toRecord(await wsRes.json());
+    expect(wsJson["id"]).toBe(workspaces[0]?.id);
+  });
+
   test("supports resource-less opaque OAuth 2.1 flow + full MCP 2025-06-18 stateless handshake (initialize, initialized 202, ping, tools/list annotations, GET/DELETE 405) + trailing slash /api/mcp/ (Sec-M1, Sec-M2, Sec-m1)", async () => {
     const { workerFetch, ownerCookie } = await setupEnv();
 

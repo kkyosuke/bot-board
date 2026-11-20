@@ -478,7 +478,18 @@ const workerHandler = {
     }
 
     if (env.ASSETS !== undefined) {
-      const assetResponse = await env.ASSETS.fetch(request);
+      let assetResponse = await env.ASSETS.fetch(request);
+      if (assetResponse.status === 404 && (request.method === "GET" || request.method === "HEAD")) {
+        const trimmedPath = url.pathname.replace(/\/+$/, "");
+        const lastSegment = trimmedPath.split("/").at(-1) ?? "";
+        const isClientSpaRoute = trimmedPath === "" || !lastSegment.includes(".");
+        if (isClientSpaRoute) {
+          const indexUrl = new URL("/index.html", request.url);
+          assetResponse = await env.ASSETS.fetch(
+            new Request(indexUrl.toString(), { method: request.method }),
+          );
+        }
+      }
       return applySpaAssetSecurityHeaders(request, assetResponse);
     }
 

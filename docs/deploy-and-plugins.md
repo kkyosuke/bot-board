@@ -19,14 +19,14 @@ flowchart LR
 
 ## 2. 事前準備（Cloudflare・GitHub OAuth・xAI）
 
-| サービス                      | 作成・取得する値                        | 設定値 / 必須権限                                                                                                      |
-| ----------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Cloudflare                    | `accountId` / `CLOUDFLARE_API_TOKEN`    | Workers Scripts（Edit）・D1（Edit）・Queues（Edit）・Workers Routes / Custom Domains（Edit）・Account Settings（Read） |
-| Cloudflare DNS（`prod` 必須） | `zoneId` / `hostname`                   | 例：`bot-board.example.com`（`betterAuthUrl` のホスト名と完全一致必須）                                                |
-| GitHub OAuth App              | `githubClientId` / `githubClientSecret` | **Authorization callback URL**：`https://<domain>/api/auth/callback/github`（`staging` / `prod` で別 App 推奨）        |
-| GitHub アカウント             | `ownerGithubId`                         | オーナー本人の数値 GitHub User ID（`gh api user --jq .id` で取得）                                                     |
-| Better Auth                   | `betterAuthSecret`                      | 32 バイト以上のランダム文字列（`openssl rand -base64 32`）                                                             |
-| xAI（Grok Worker 用）         | `xaiApiKey`                             | `staging` は任意、`prod` は必須（任意で `xaiModel`・`xaiApiUrl` を上書き可）                                           |
+| サービス                              | 作成・取得する値                        | 設定値 / 必須権限                                                                                                                                                                              |
+| ------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloudflare（Workers Paid プラン必須） | `accountId` / `CLOUDFLARE_API_TOKEN`    | Queues・`limits.cpuMs: 10000` に Workers Paid プランが必須。Token 権限：Workers Scripts（Edit）・D1（Edit）・Queues（Edit）・Workers Routes / Custom Domains（Edit）・Account Settings（Read） |
+| Cloudflare DNS（`prod` 必須）         | `zoneId` / `hostname`                   | 例：`bot-board.example.com`（`betterAuthUrl` のホスト名と完全一致必須）                                                                                                                        |
+| GitHub OAuth App                      | `githubClientId` / `githubClientSecret` | **Authorization callback URL**：`https://<domain>/api/auth/callback/github`（`staging` / `prod` で別 App 推奨）                                                                                |
+| GitHub アカウント                     | `ownerGithubId`                         | オーナー本人の数値 GitHub User ID（`gh api user --jq .id` で取得）                                                                                                                             |
+| Better Auth                           | `betterAuthSecret`                      | 32 バイト以上のランダム文字列（`openssl rand -base64 32`）                                                                                                                                     |
+| xAI（Grok Worker 用）                 | `xaiApiKey`                             | `staging` は任意、`prod` は必須（任意で `xaiModel`・`xaiApiUrl` を上書き可）                                                                                                                   |
 
 ---
 
@@ -47,11 +47,11 @@ flowchart LR
 
 ### 3.2 デプロイ実行（ローカル / GitHub Actions 共通の 4 ステップ）
 
-| 実行経路           | コマンド / トリガー                                   | 自動実行内容（`infra/deploy.ts`）                                                                                                                                         |
-| ------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ローカル CLI       | `bun run deploy -- --stack staging`（または `prod`）  | ① `build` + `build:worker` + `build:infra` → ② `pulumi up --yes` → ③ `migrate-d1.ts`（リモート D1 SQL 適用・SHA-256 検証）→ ④ `smoke.ts`（実環境 16 項目疎通確認）        |
-| GitHub Actions     | `.github/workflows/deploy.yml`（`workflow_dispatch`） | `CLOUDFLARE_API_TOKEN`・`PULUMI_ACCESS_TOKEN`（またはセルフホスト backend）・任意 `SMOKE_BOT_TOKEN` を環境 Secrets に登録して `staging` / `prod` を選択実行               |
-| 単独スモーク再検証 | `bun run smoke -- --base-url https://<domain>`        | `/api/health`・SPA 4 経路セキュリティヘッダー・RFC 9728 / 8414 / OIDC 発見 7 経路 + CORS・JWKS・`OPTIONS /api/mcp`・`401 WWW-Authenticate`・`/api/human/workspace` を検証 |
+| 実行経路           | コマンド / トリガー                                   | 必須・任意環境変数 / Secrets および自動実行内容（`infra/deploy.ts`）                                                                                                                                                                               |
+| ------------------ | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ローカル CLI       | `bun run deploy -- --stack staging`（または `prod`）  | 必須：`CLOUDFLARE_API_TOKEN`（任意：`CLOUDFLARE_ACCOUNT_ID`＝未設定時は Pulumi Stack の `bot-board:accountId` を自動取得、`SMOKE_BOT_TOKEN`）。① `build` + `build:worker` + `build:infra` → ② `pulumi up --yes` → ③ `migrate-d1.ts` → ④ `smoke.ts` |
+| GitHub Actions     | `.github/workflows/deploy.yml`（`workflow_dispatch`） | 環境 Secrets：必須 `CLOUDFLARE_API_TOKEN`、Pulumi Cloud 用 `PULUMI_ACCESS_TOKEN`（またはセルフホスト backend 用 `PULUMI_BACKEND_URL` + `PULUMI_CONFIG_PASSPHRASE`）、任意 `CLOUDFLARE_ACCOUNT_ID`・`SMOKE_BOT_TOKEN`                               |
+| 単独スモーク再検証 | `bun run smoke -- --base-url https://<domain>`        | `/api/health`・SPA 4 経路セキュリティヘッダー（`Sec-Fetch-Mode: navigate`）・RFC 9728 / 8414 / OIDC 発見 7 経路 + CORS・JWKS・`OPTIONS /api/mcp`・`401 WWW-Authenticate`・`/api/human/workspace` を検証                                            |
 
 ---
 

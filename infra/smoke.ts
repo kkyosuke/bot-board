@@ -93,12 +93,16 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
     }),
   );
 
-  // 2. SPA Static Assets & client route fallbacks + clickjacking defense (configured in public/_headers & assets.config.headers)
+  // 2. SPA Static Assets & client route fallbacks + security headers (Sec-Fetch-Mode: navigate triggers Cloudflare edge SPA routing)
   for (const spaPath of ["/", "/board", "/sign-in", "/consent"]) {
     checks.push(
       await runSingleCheck(`GET ${spaPath} (SPA)`, async () => {
         const res = await fetchFn(`${origin}${spaPath}`, {
           redirect: "manual",
+          headers: {
+            "Sec-Fetch-Mode": "navigate",
+            Accept: "text/html,application/xhtml+xml",
+          },
           signal: AbortSignal.timeout(timeoutMs),
         });
         if (res.status !== 200) {
@@ -110,6 +114,17 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
         }
         if (res.headers.get("x-frame-options")?.toUpperCase() !== "DENY") {
           throw new Error("Missing X-Frame-Options: DENY on SPA route");
+        }
+        if (spaPath === "/sign-in" || spaPath === "/consent") {
+          const cacheControl = res.headers.get("cache-control") ?? "";
+          if (!cacheControl.toLowerCase().includes("no-store")) {
+            throw new Error(`Missing Cache-Control: no-store on ${spaPath} ("${cacheControl}")`);
+          }
+          const refPolicy = res.headers.get("referrer-policy") ?? "";
+          if (!refPolicy.toLowerCase().includes("no-referrer")) {
+            throw new Error(`Missing Referrer-Policy: no-referrer on ${spaPath} ("${refPolicy}")`);
+          }
+          return "200 text/html + DENY + no-store + no-referrer";
         }
         return "200 text/html + X-Frame-Options: DENY";
       }),

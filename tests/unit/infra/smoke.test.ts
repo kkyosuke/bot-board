@@ -91,12 +91,23 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
     }
 
     if (["/", "/board", "/sign-in", "/consent"].includes(url.pathname)) {
+      const reqHeaders = new Headers(init?.headers);
+      if (url.pathname !== "/" && reqHeaders.get("sec-fetch-mode") !== "navigate") {
+        return Promise.resolve(new Response("Not Found", { status: 404 }));
+      }
+      const isSensitive = url.pathname === "/sign-in" || url.pathname === "/consent";
       return Promise.resolve(
         new Response("<!doctype html><html></html>", {
           status: 200,
           headers: {
             "Content-Type": "text/html; charset=utf-8",
             "X-Frame-Options": "DENY",
+            ...(isSensitive
+              ? {
+                  "Cache-Control": "no-store",
+                  "Referrer-Policy": "no-referrer",
+                }
+              : { "Referrer-Policy": "same-origin" }),
           },
         }),
       );
@@ -237,15 +248,25 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
         BOT_WORK_DLQ: {
           send: () => Promise.resolve(),
         },
-        // Bare HTML response without headers proves workerHandler.fetch injects SPA security headers itself
+        // Cloudflare-faithful ASSETS mock: only serves `/` or `/index.html` directly, or unmatched SPA paths with Sec-Fetch-Mode: navigate
         ASSETS: {
-          fetch: () =>
-            Promise.resolve(
-              new Response("<!doctype html><html><body>bot-board</body></html>", {
-                status: 200,
-                headers: { "Content-Type": "text/html; charset=utf-8" },
-              }),
-            ),
+          fetch: (input) => {
+            const req = input instanceof Request ? input : new Request(input);
+            const assetUrl = new URL(req.url);
+            const isIndexAsset = assetUrl.pathname === "/" || assetUrl.pathname === "/index.html";
+            const isNavigateSpa =
+              req.headers.get("sec-fetch-mode") === "navigate" &&
+              !(assetUrl.pathname.split("/").at(-1) ?? "").includes(".");
+            if (isIndexAsset || isNavigateSpa) {
+              return Promise.resolve(
+                new Response("<!doctype html><html><body>bot-board</body></html>", {
+                  status: 200,
+                  headers: { "Content-Type": "text/html; charset=utf-8" },
+                }),
+              );
+            }
+            return Promise.resolve(new Response("Not Found", { status: 404 }));
+          },
         },
         BETTER_AUTH_SECRET: "smoke-test-better-auth-secret-0123456789",
         BETTER_AUTH_URL: origin,
@@ -254,8 +275,13 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
         APP_ENV: "staging",
       };
 
+      const seenSpaNavigateHeaders: Record<string, string | null> = {};
       const realWorkerFetch: SmokeFetchLike = async (input, init) => {
         const req = input instanceof Request ? input : new Request(input, init);
+        const reqUrl = new URL(req.url);
+        if (["/", "/board", "/sign-in", "/consent"].includes(reqUrl.pathname)) {
+          seenSpaNavigateHeaders[reqUrl.pathname] = req.headers.get("sec-fetch-mode");
+        }
         const pending: Promise<unknown>[] = [];
         const res = await workerHandler.fetch(req, env, {
           waitUntil(p) {
@@ -277,6 +303,23 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
       expect(failed).toEqual([]);
       expect(report.ok).toBe(true);
       expect(report.checks.length).toBe(16);
+      expect(seenSpaNavigateHeaders).toEqual({
+        "/": "navigate",
+        "/board": "navigate",
+        "/sign-in": "navigate",
+        "/consent": "navigate",
+      });
+
+      // Non-navigation SPA request (no Sec-Fetch-Mode header) MUST fall back to /index.html with strict headers
+      const nonNavConsent = await realWorkerFetch(`${origin}/consent`);
+      expect(nonNavConsent.status).toBe(200);
+      expect(nonNavConsent.headers.get("X-Frame-Options")).toBe("DENY");
+      expect(nonNavConsent.headers.get("Referrer-Policy")).toBe("no-referrer");
+      expect(nonNavConsent.headers.get("Cache-Control")).toBe("no-store");
+
+      // Missing static asset file with extension MUST still return 404 (never rewritten to /index.html)
+      const missingAsset = await realWorkerFetch(`${origin}/assets/nonexistent.js`);
+      expect(missingAsset.status).toBe(404);
     } finally {
       sqliteDb.close();
     }

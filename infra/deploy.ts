@@ -56,6 +56,37 @@ function readPulumiOutputs(repoRoot: string, pulumiBin: string, stack: string) {
   return parsed.data;
 }
 
+function resolveCloudflareAccountId(repoRoot: string, pulumiBin: string, stack: string): string {
+  const fromEnv = process.env["CLOUDFLARE_ACCOUNT_ID"]?.trim() ?? "";
+  if (fromEnv !== "") {
+    return fromEnv;
+  }
+  const proc = Bun.spawnSync(
+    [
+      pulumiBin,
+      "config",
+      "get",
+      "bot-board:accountId",
+      "--cwd",
+      resolve(repoRoot, "infra"),
+      "--stack",
+      stack,
+    ],
+    {
+      cwd: repoRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const fromPulumi = proc.exitCode === 0 ? proc.stdout.toString().trim() : "";
+  if (fromPulumi !== "") {
+    return fromPulumi;
+  }
+  throw new Error(
+    `Missing Cloudflare Account ID: set CLOUDFLARE_ACCOUNT_ID or configure bot-board:accountId on Pulumi stack "${stack}".`,
+  );
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const stack = readCliFlag(args, "--stack") ?? process.env["PULUMI_STACK"] ?? "staging";
@@ -73,9 +104,8 @@ async function main(): Promise<void> {
   }
 
   const apiToken = process.env["CLOUDFLARE_API_TOKEN"]?.trim() ?? "";
-  const accountId = process.env["CLOUDFLARE_ACCOUNT_ID"]?.trim() ?? "";
-  if (apiToken === "" || accountId === "") {
-    throw new Error("CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set.");
+  if (apiToken === "") {
+    throw new Error("CLOUDFLARE_API_TOKEN must be set before running deploy.");
   }
 
   const repoRoot = resolve(import.meta.dirname, "..");
@@ -101,6 +131,7 @@ async function main(): Promise<void> {
   );
 
   const outputs = readPulumiOutputs(repoRoot, pulumiBin, stack);
+  const accountId = resolveCloudflareAccountId(repoRoot, pulumiBin, stack);
 
   process.stdout.write(`==> [3/4] Applying remote D1 migrations (${outputs.d1DatabaseUuid})...\n`);
   const migrations = loadDiskMigrations(resolve(repoRoot, "src", "db", "migrations"));
