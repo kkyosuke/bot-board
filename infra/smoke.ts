@@ -73,7 +73,7 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
   const timeoutMs = options.timeoutMs ?? 15_000;
   const checks: SmokeCheckItemResult[] = [];
 
-  // 1. Health endpoint
+  // 1. Health endpoint + baseline security header
   checks.push(
     await runSingleCheck("GET /api/health", async () => {
       const res = await fetchFn(`${origin}/api/health`, {
@@ -82,15 +82,18 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
       if (res.status !== 200) {
         throw new Error(`Expected 200, got ${res.status}`);
       }
+      if (res.headers.get("x-content-type-options")?.toLowerCase() !== "nosniff") {
+        throw new Error("Missing X-Content-Type-Options: nosniff on /api/health");
+      }
       const parsed = healthSchema.safeParse(await res.json());
       if (!parsed.success) {
         throw new Error("Invalid /api/health JSON payload");
       }
-      return "200 ok";
+      return "200 ok + nosniff";
     }),
   );
 
-  // 2. SPA Static Assets & client route fallbacks + clickjacking defense (configured in assets.config.headers)
+  // 2. SPA Static Assets & client route fallbacks + clickjacking defense (configured in public/_headers & assets.config.headers)
   for (const spaPath of ["/", "/board", "/sign-in", "/consent"]) {
     checks.push(
       await runSingleCheck(`GET ${spaPath} (SPA)`, async () => {
@@ -113,7 +116,7 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
     );
   }
 
-  // 3. RFC 9728 OAuth Protected Resource Metadata (root + path-aware /api/mcp)
+  // 3. RFC 9728 OAuth Protected Resource Metadata (root + path-aware /api/mcp) + public CORS
   for (const prmPath of [
     "/.well-known/oauth-protected-resource",
     "/.well-known/oauth-protected-resource/api/mcp",
@@ -126,6 +129,9 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
         if (res.status !== 200) {
           throw new Error(`Expected 200, got ${res.status}`);
         }
+        if (res.headers.get("access-control-allow-origin") !== "*") {
+          throw new Error(`Missing Access-Control-Allow-Origin: * on ${prmPath}`);
+        }
         const parsed = protectedResourceSchema.safeParse(await res.json());
         if (!parsed.success) {
           throw new Error("Invalid RFC 9728 protected resource metadata");
@@ -135,11 +141,12 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
     );
   }
 
-  // 4. RFC 8414 / OIDC Authorization Server Metadata
+  // 4. RFC 8414 / OIDC Authorization Server Metadata (including path-inserted /.well-known/openid-configuration/api/auth) + public CORS
   for (const asPath of [
     "/.well-known/oauth-authorization-server",
     "/.well-known/oauth-authorization-server/api/auth",
     "/.well-known/openid-configuration",
+    "/.well-known/openid-configuration/api/auth",
     "/api/auth/.well-known/openid-configuration",
   ]) {
     checks.push(
@@ -150,6 +157,9 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
         if (res.status !== 200) {
           throw new Error(`Expected 200, got ${res.status}`);
         }
+        if (res.headers.get("access-control-allow-origin") !== "*") {
+          throw new Error(`Missing Access-Control-Allow-Origin: * on ${asPath}`);
+        }
         const parsed = authServerMetaSchema.safeParse(await res.json());
         if (!parsed.success) {
           throw new Error("Invalid OAuth AS metadata");
@@ -159,7 +169,7 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
     );
   }
 
-  // 5. Better Auth JWKS (proves D1 jwks table migrated + Workers CPU limit handles Ed25519 keygen)
+  // 5. Better Auth JWKS (proves D1 jwks table migrated + Workers CPU limit handles Ed25519 keygen + public CORS)
   checks.push(
     await runSingleCheck("GET /api/auth/jwks", async () => {
       const res = await fetchFn(`${origin}/api/auth/jwks`, {
@@ -167,6 +177,9 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
       });
       if (res.status !== 200) {
         throw new Error(`Expected 200, got ${res.status}`);
+      }
+      if (res.headers.get("access-control-allow-origin") !== "*") {
+        throw new Error("Missing Access-Control-Allow-Origin: * on /api/auth/jwks");
       }
       const parsed = jwksSchema.safeParse(await res.json());
       if (!parsed.success) {
@@ -176,7 +189,42 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
     }),
   );
 
-  // 6. MCP 401 WWW-Authenticate discovery challenge
+  // 6a. MCP CORS preflight (OPTIONS /api/mcp -> 204, no Allow-Credentials)
+  checks.push(
+    await runSingleCheck("OPTIONS /api/mcp (CORS preflight)", async () => {
+      const res = await fetchFn(`${origin}/api/mcp`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://chatgpt.com",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "Authorization, Content-Type, MCP-Protocol-Version",
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status !== 204) {
+        throw new Error(`Expected 204, got ${res.status}`);
+      }
+      if (res.headers.get("access-control-allow-origin") !== "*") {
+        throw new Error("Missing Access-Control-Allow-Origin: * on OPTIONS /api/mcp");
+      }
+      if (res.headers.get("access-control-allow-credentials") !== null) {
+        throw new Error("Unexpected Access-Control-Allow-Credentials on OPTIONS /api/mcp");
+      }
+      const allowMethods = res.headers.get("access-control-allow-methods") ?? "";
+      if (!allowMethods.includes("POST")) {
+        throw new Error(`Access-Control-Allow-Methods missing POST: "${allowMethods}"`);
+      }
+      const exposeHeaders = res.headers.get("access-control-expose-headers") ?? "";
+      if (!exposeHeaders.includes("WWW-Authenticate")) {
+        throw new Error(
+          `Access-Control-Expose-Headers missing WWW-Authenticate: "${exposeHeaders}"`,
+        );
+      }
+      return "204 CORS preflight ok";
+    }),
+  );
+
+  // 6b. MCP 401 WWW-Authenticate discovery challenge (path-aware resource_metadata + scope + CORS)
   checks.push(
     await runSingleCheck("POST /api/mcp (unauth 401 WWW-Authenticate)", async () => {
       const res = await fetchFn(`${origin}/api/mcp`, {
@@ -191,15 +239,30 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
       if (res.status !== 401) {
         throw new Error(`Expected 401, got ${res.status}`);
       }
+      if (res.headers.get("access-control-allow-origin") !== "*") {
+        throw new Error("Missing Access-Control-Allow-Origin: * on 401 /api/mcp");
+      }
+      const exposeHeaders = res.headers.get("access-control-expose-headers") ?? "";
+      if (!exposeHeaders.includes("WWW-Authenticate")) {
+        throw new Error(
+          `Access-Control-Expose-Headers missing WWW-Authenticate: "${exposeHeaders}"`,
+        );
+      }
       const wwwAuth = res.headers.get("www-authenticate") ?? "";
-      if (!wwwAuth.includes("Bearer") || !wwwAuth.includes("resource_metadata=")) {
+      if (
+        !wwwAuth.includes("Bearer") ||
+        !wwwAuth.includes(
+          `resource_metadata="${origin}/.well-known/oauth-protected-resource/api/mcp"`,
+        ) ||
+        !wwwAuth.includes("scope=")
+      ) {
         throw new Error(`Unexpected WWW-Authenticate header: "${wwwAuth}"`);
       }
-      return "401 Bearer resource_metadata present";
+      return "401 Bearer path-aware resource_metadata + scope + CORS";
     }),
   );
 
-  // 7. Human API unauth guard (proves Better Auth + D1 session middleware returns 401 without 500)
+  // 7. Human API unauth guard + no-store + non-CORS boundary
   checks.push(
     await runSingleCheck("GET /api/human/workspace (unauth 401)", async () => {
       const res = await fetchFn(`${origin}/api/human/workspace`, {
@@ -208,7 +271,18 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
       if (res.status !== 401) {
         throw new Error(`Expected 401, got ${res.status}`);
       }
-      return "401 unauthorized as expected";
+      const cacheControl = res.headers.get("cache-control") ?? "";
+      if (!cacheControl.toLowerCase().includes("no-store")) {
+        throw new Error(
+          `Missing Cache-Control: no-store on /api/human/workspace ("${cacheControl}")`,
+        );
+      }
+      if (res.headers.get("access-control-allow-origin") !== null) {
+        throw new Error(
+          "Cookie-protected /api/human/workspace must not emit Access-Control-Allow-Origin",
+        );
+      }
+      return "401 unauthorized + no-store + non-CORS";
     }),
   );
 

@@ -11,6 +11,7 @@ AIエージェント向けの作業基準。詳細は各ドキュメントを参
 | [docs/architecture.md](docs/architecture.md)                 | 技術スタック、レイヤー境界、ディレクトリ構成、自動検証コマンド  |
 | [docs/data-and-state.md](docs/data-and-state.md)             | DBスキーマ、`Task` / `DecisionCard` 状態遷移、5秒取消・排他制御 |
 | [docs/bot-integration.md](docs/bot-integration.md)           | Bot接続方針、MCPツール / Human API 契約、ワーカー・認可境界     |
+| [docs/deploy-and-plugins.md](docs/deploy-and-plugins.md)     | Cloudflare デプロイ手順、Pulumi Secrets、外部プラグイン接続基準 |
 | [docs/concept.md](docs/concept.md)                           | 企画、UI要件、MVP、受け入れ条件（`UX-*` / `DEC-*` / `BOT-*`）   |
 
 ## 必須ルール

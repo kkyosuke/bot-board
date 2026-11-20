@@ -757,6 +757,11 @@ test.describe("S6 Secondary Screens (/board, /history, /settings) & Live /api/hu
     await expect(page.getByTestId("revoke-confirm-box-bot_1")).toHaveCount(0);
     expect(revokePatchCalls).toBe(0);
 
+    // Copyable Remote MCP Endpoint URL box & >=44px Copy button are visible in Bot Connections
+    await expect(page.getByTestId("settings-mcp-endpoint-box")).toBeVisible();
+    await expect(page.getByTestId("settings-mcp-endpoint-url")).toContainText("/api/mcp");
+    await expect(page.getByTestId("btn-copy-mcp-url")).toBeVisible();
+
     // Confirm executes PATCH status=revoked and disables controls (await status BEFORE asserting count)
     await page.getByTestId("btn-request-revoke-bot_1").click();
     await page.getByTestId("btn-confirm-revoke-bot_1").click();
@@ -766,5 +771,27 @@ test.describe("S6 Secondary Screens (/board, /history, /settings) & Live /api/hu
     await expect(page.getByTestId("btn-request-revoke-bot_1")).toBeDisabled();
     await assertNoHorizontalOverflow(page);
     await assertAllVisibleButtonsAtLeast44px(page);
+
+    // Owner Sign-Out button calls POST /api/auth/sign-out and navigates to /sign-in
+    let signOutCalled = false;
+    await page.route("**/api/auth/sign-out", async (route) => {
+      signOutCalled = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ success: true }),
+      });
+    });
+    await page.unroute("**/api/human/workspace");
+    await page.route("**/api/human/workspace", async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "NOT_AUTHORIZED", message: "Sign-in required" }),
+      });
+    });
+    await page.getByTestId("btn-settings-sign-out").click();
+    await expect(page).toHaveURL(/\/sign-in$/);
+    expect(signOutCalled).toBe(true);
   });
 });

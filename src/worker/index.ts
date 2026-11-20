@@ -26,6 +26,7 @@ import { type AppDatabase, createD1Database, type D1LikeDatabase, schema } from 
 import { type BotScope } from "@/domain";
 import { handleWorkerHttpRequest } from "@/server/http-runtime";
 import { createCloudflareRateLimiter } from "@/server/rate-limit";
+import { applySpaAssetSecurityHeaders } from "@/server/security-headers";
 import { assertBotWriteAccess } from "@/services/bot";
 import {
   type BotWorkQueueProducer,
@@ -477,7 +478,8 @@ const workerHandler = {
     }
 
     if (env.ASSETS !== undefined) {
-      return await env.ASSETS.fetch(request);
+      const assetResponse = await env.ASSETS.fetch(request);
+      return applySpaAssetSecurityHeaders(request, assetResponse);
     }
 
     return new Response("Not Found", { status: 404 });

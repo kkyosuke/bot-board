@@ -306,7 +306,7 @@ describe("S2 Bot Services & Stateless Streamable HTTP /api/mcp (BOT-02, DEC-01, 
     );
     expect(unauth.status).toBe(401);
     expect(unauth.headers.get("WWW-Authenticate")).toBe(
-      'Bearer resource_metadata="https://staging.bot-board.example/.well-known/oauth-protected-resource"',
+      'Bearer resource_metadata="https://staging.bot-board.example/.well-known/oauth-protected-resource/api/mcp", scope="tasks:read tasks:write proposals:write decisions:read"',
     );
     expect(unauth.json).toMatchObject({ code: "NOT_AUTHORIZED", retryable: false });
 

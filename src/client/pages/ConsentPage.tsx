@@ -3,6 +3,7 @@ import { type ReactElement, useCallback, useEffect, useMemo, useState } from "re
 import { type BotScope } from "@/domain";
 
 import {
+  extractSignedOAuthQuery,
   fetchOAuthConsentContext,
   type OAuthConsentContextView,
   submitOAuthConsentDecision,
@@ -67,8 +68,10 @@ export function ConsentPage(props: ConsentPageProps): ReactElement {
   const parsedQuery = useMemo(() => {
     const rawQuery = search.startsWith("?") ? search.slice(1) : search;
     const params = new URLSearchParams(rawQuery);
+    const signedQuery = extractSignedOAuthQuery(search) ?? rawQuery;
     return {
       rawQuery,
+      signedQuery,
       clientId: params.get("client_id")?.trim() ?? "",
       scope: params.get("scope")?.trim() ?? null,
       sig: params.get("sig")?.trim() ?? "",
@@ -186,7 +189,7 @@ export function ConsentPage(props: ConsentPageProps): ReactElement {
       const res = await submitOAuthConsentDecision({
         accept,
         ...(grantedScopeString !== undefined ? { scope: grantedScopeString } : {}),
-        oauthQuery: parsedQuery.rawQuery,
+        oauthQuery: parsedQuery.signedQuery,
       });
 
       setIsSubmitting(false);
@@ -213,17 +216,23 @@ export function ConsentPage(props: ConsentPageProps): ReactElement {
 
       setRedirectUrl(res.url);
       if (accept) {
-        // M2: Handle prompt=login redirect back to /sign-in without showing a false "approved" banner
-        const isSignInReauth = ((): boolean => {
+        // Handle prompt=login / max_age redirect back to /sign-in preserving Better Auth's freshly signed query
+        const signInReauthTarget = ((): string | null => {
           try {
             const parsedUrl = new URL(res.url, window.location.origin);
-            return parsedUrl.origin === window.location.origin && parsedUrl.pathname === "/sign-in";
+            if (parsedUrl.origin === window.location.origin && parsedUrl.pathname === "/sign-in") {
+              if (parsedUrl.search !== "") {
+                return `${parsedUrl.pathname}${parsedUrl.search}`;
+              }
+              return buildSignInRedirectPath(`/consent${search}`);
+            }
+            return null;
           } catch {
-            return false;
+            return null;
           }
         })();
-        if (isSignInReauth) {
-          onNavigate(buildSignInRedirectPath(`/consent${search}`), { replace: true });
+        if (signInReauthTarget !== null) {
+          onNavigate(signInReauthTarget, { replace: true });
           return;
         }
         setViewState("approved");
@@ -233,7 +242,7 @@ export function ConsentPage(props: ConsentPageProps): ReactElement {
         setMessage("アクセスを拒否しました（access_denied・bot_connections 未作成）。");
       }
     },
-    [canApprove, canDeny, context, onNavigate, parsedQuery.rawQuery, search, selectedScopes],
+    [canApprove, canDeny, context, onNavigate, parsedQuery.signedQuery, search, selectedScopes],
   );
 
   const visibleScopeMeta = useMemo(() => {
@@ -569,54 +578,81 @@ export function ConsentPage(props: ConsentPageProps): ReactElement {
               <div className="text-xs font-bold">
                 D1 実効スコープ絞り込み（token.scopes ∩ bot_connections.scopes）
               </div>
-              {visibleScopeMeta.map((scopeItem) => {
-                const checked = selectedScopes.includes(scopeItem.id);
-                return (
-                  <button
-                    key={scopeItem.id}
-                    type="button"
-                    role="checkbox"
-                    aria-checked={checked}
-                    data-testid={`consent-scope-${scopeItem.id}`}
-                    disabled={isActionBlocked}
-                    onClick={() => toggleScope(scopeItem.id)}
-                    className="flex min-h-[48px] min-w-[44px] w-full cursor-pointer items-start gap-2.5 rounded-xl border p-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45"
-                    style={{
-                      borderColor: checked ? "var(--tone-accept-border)" : "var(--border-default)",
-                      backgroundColor: checked ? "var(--tone-accept-bg)" : "var(--surface-card)",
-                    }}
-                  >
-                    <span
-                      className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 text-xs font-bold"
+              {context !== null && visibleScopeMeta.length === 0 ? (
+                <div
+                  role="alert"
+                  data-testid="consent-zero-scope-warning"
+                  className="space-y-1 rounded-xl border p-3 text-xs"
+                  style={{
+                    borderColor: "var(--tone-warn-border)",
+                    backgroundColor: "var(--tone-warn-bg)",
+                  }}
+                >
+                  <div className="font-bold" style={{ color: "var(--tone-warn)" }}>
+                    Bot 用スコープが 0 件のため許可できません
+                  </div>
+                  <p className="leading-relaxed" style={{ color: "var(--ink-muted)" }}>
+                    接続元クライアントは bot-board の Bot スコープ（
+                    <code className="font-mono">tasks:read</code> /{" "}
+                    <code className="font-mono">tasks:write</code> /{" "}
+                    <code className="font-mono">proposals:write</code> /{" "}
+                    <code className="font-mono">decisions:read</code>
+                    ）を1つも要求していません。クライアント側で少なくとも1つの Bot
+                    スコープを指定して再接続するか、「拒否する」を選択してください。
+                  </p>
+                </div>
+              ) : (
+                visibleScopeMeta.map((scopeItem) => {
+                  const checked = selectedScopes.includes(scopeItem.id);
+                  return (
+                    <button
+                      key={scopeItem.id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      data-testid={`consent-scope-${scopeItem.id}`}
+                      disabled={isActionBlocked}
+                      onClick={() => toggleScope(scopeItem.id)}
+                      className="flex min-h-[48px] min-w-[44px] w-full cursor-pointer items-start gap-2.5 rounded-xl border p-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45"
                       style={{
-                        borderColor: checked ? "var(--tone-accept)" : "var(--ink-muted)",
-                        backgroundColor: checked ? "var(--tone-accept)" : "transparent",
-                        color: "var(--accent-primary-ink)",
+                        borderColor: checked
+                          ? "var(--tone-accept-border)"
+                          : "var(--border-default)",
+                        backgroundColor: checked ? "var(--tone-accept-bg)" : "var(--surface-card)",
                       }}
-                      aria-hidden="true"
                     >
-                      {checked ? "✓" : ""}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block break-words text-xs font-bold">
-                        {scopeItem.title}{" "}
+                      <span
+                        className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 text-xs font-bold"
+                        style={{
+                          borderColor: checked ? "var(--tone-accept)" : "var(--ink-muted)",
+                          backgroundColor: checked ? "var(--tone-accept)" : "transparent",
+                          color: "var(--accent-primary-ink)",
+                        }}
+                        aria-hidden="true"
+                      >
+                        {checked ? "✓" : ""}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block break-words text-xs font-bold">
+                          {scopeItem.title}{" "}
+                          <span
+                            className="font-mono font-normal"
+                            style={{ color: "var(--ink-muted)" }}
+                          >
+                            ({scopeItem.id})
+                          </span>
+                        </span>
                         <span
-                          className="font-mono font-normal"
+                          className="block break-words text-xs"
                           style={{ color: "var(--ink-muted)" }}
                         >
-                          ({scopeItem.id})
+                          {scopeItem.desc}
                         </span>
                       </span>
-                      <span
-                        className="block break-words text-xs"
-                        style={{ color: "var(--ink-muted)" }}
-                      >
-                        {scopeItem.desc}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
+                    </button>
+                  );
+                })
+              )}
             </div>
 
             {/* Explicit BOT-02 Prohibition Box */}

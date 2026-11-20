@@ -261,7 +261,7 @@ describe("S4 OAuth 2.1 MCP Discovery (RFC 9728/8414), DCR, Consent bot_connectio
     );
     expect(unauthMcp.status).toBe(401);
     expect(unauthMcp.headers.get("WWW-Authenticate")).toBe(
-      `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`,
+      `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/api/mcp", scope="tasks:read tasks:write proposals:write decisions:read"`,
     );
 
     // 2. RFC 9728 Protected Resource Metadata (both root & /api/mcp suffixed)

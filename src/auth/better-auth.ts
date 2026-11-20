@@ -150,11 +150,13 @@ export function assertAllowedOwnerGithubProfile(params: {
   const allowed = params.configuredOwnerGithubId?.trim() ?? "";
   if (allowed === "") {
     throw new APIError("FORBIDDEN", {
+      code: "NOT_AUTHORIZED",
       message: "NOT_AUTHORIZED: OWNER_GITHUB_ID is not configured.",
     });
   }
   if (params.githubAccountId.trim() !== allowed) {
     throw new APIError("FORBIDDEN", {
+      code: "NOT_AUTHORIZED",
       message: "NOT_AUTHORIZED: Only the configured single owner GitHub account is allowed.",
     });
   }
@@ -596,6 +598,7 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
           loginPage: "/sign-in",
           consentPage: "/consent",
           resource: mcpResourceUrl,
+          grantTypes: ["authorization_code", "refresh_token"],
           allowDynamicClientRegistration: true,
           allowUnauthenticatedClientRegistration: true,
           scopes: ["openid", "profile", "email", "offline_access", ...BOT_SCOPES],
@@ -658,6 +661,7 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
           async before(newUser) {
             if (configuredOwnerGithubId === "") {
               throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
                 message: "NOT_AUTHORIZED: OWNER_GITHUB_ID must be configured before signup.",
               });
             }
@@ -668,6 +672,7 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
               .get();
             if (existingUser !== undefined) {
               throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
                 message: "NOT_AUTHORIZED: Single-owner workspace forbids additional signups.",
               });
             }
@@ -683,6 +688,7 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
           before(newAccount) {
             if (newAccount.providerId !== "github") {
               throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
                 message: "NOT_AUTHORIZED: Only GitHub OAuth accounts are permitted.",
               });
             }
@@ -699,6 +705,7 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
           async before(newSession) {
             if (configuredOwnerGithubId === "") {
               throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
                 message: "NOT_AUTHORIZED: OWNER_GITHUB_ID must be configured.",
               });
             }
@@ -714,6 +721,7 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
               .get();
             if (ownerAccount === undefined || ownerAccount.accountId !== configuredOwnerGithubId) {
               throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
                 message: "NOT_AUTHORIZED: Session creation denied for non-owner account.",
               });
             }
@@ -762,14 +770,42 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
 
   return {
     async handler(request: Request): Promise<Response> {
+      const reqUrl = new URL(request.url);
       const response = await auth.handler(request);
+      if (
+        request.method === "GET" &&
+        reqUrl.pathname.startsWith("/api/auth/callback/") &&
+        response.status === 403
+      ) {
+        const redirectHeaders = new Headers({
+          Location: `${baseOrigin}/sign-in?error=NOT_AUTHORIZED`,
+          "Cache-Control": "no-store",
+        });
+        const setCookies =
+          typeof response.headers.getSetCookie === "function"
+            ? response.headers.getSetCookie()
+            : [];
+        if (setCookies.length > 0) {
+          for (const cookie of setCookies) {
+            redirectHeaders.append("Set-Cookie", cookie);
+          }
+        } else {
+          const singleCookie = response.headers.get("set-cookie");
+          if (singleCookie !== null) {
+            redirectHeaders.append("Set-Cookie", singleCookie);
+          }
+        }
+        return new Response(null, {
+          status: 302,
+          headers: redirectHeaders,
+        });
+      }
       if (
         response.status === 404 &&
         mcpOAuthEnabled &&
         (request.method === "GET" || request.method === "HEAD")
       ) {
-        const reqUrl = new URL(request.url);
-        // Support root-level RFC 8414 & OIDC discovery alongside /api/auth-suffixed paths
+        // Support root-level & path-aware RFC 8414 / OIDC discovery alongside /api/auth-suffixed paths
         if (reqUrl.pathname === "/.well-known/oauth-authorization-server") {
           const rewritten = new Request(
             `${baseOrigin}/.well-known/oauth-authorization-server/api/auth`,
@@ -777,7 +813,10 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
           );
           return await auth.handler(rewritten);
         }
-        if (reqUrl.pathname === "/.well-known/openid-configuration") {
+        if (
+          reqUrl.pathname === "/.well-known/openid-configuration" ||
+          reqUrl.pathname === "/.well-known/openid-configuration/api/auth"
+        ) {
           const rewritten = new Request(`${baseOrigin}/api/auth/.well-known/openid-configuration`, {
             method: request.method,
             headers: request.headers,

@@ -116,9 +116,64 @@ export async function checkOwnerAuthStatus(): Promise<OwnerAuthCheckResult> {
   }
 }
 
+/**
+ * Extracts only the Better Auth signed OAuth query parameters (filtering by `ba_param`
+ * when present) so unrelated query parameters never invalidate the HMAC signature.
+ */
+export function extractSignedOAuthQuery(search: string): string | null {
+  const normalized = search.startsWith("?") ? search.slice(1) : search;
+  if (normalized.trim() === "") {
+    return null;
+  }
+  const params = new URLSearchParams(normalized);
+  if (!params.has("sig")) {
+    return null;
+  }
+  const signedParamNames = params.getAll("ba_param").filter((name) => name.trim() !== "");
+  if (signedParamNames.length === 0) {
+    return normalized;
+  }
+  const allowedNames = new Set<string>(signedParamNames);
+  const filtered = new URLSearchParams();
+  for (const [key, value] of params.entries()) {
+    if (key === "sig" || key === "ba_param" || allowedNames.has(key)) {
+      filtered.append(key, value);
+    }
+  }
+  return filtered.toString();
+}
+
+/**
+ * Returns true when an incoming OAuth 2.1 login redirect requires fresh re-authentication
+ * (`prompt=login` or `max_age`), preventing an infinite redirect loop for already-signed-in owners.
+ */
+export function requiresForcedOAuthReauth(search: string): boolean {
+  const normalized = search.startsWith("?") ? search.slice(1) : search;
+  if (normalized.trim() === "") {
+    return false;
+  }
+  const params = new URLSearchParams(normalized);
+  if (params.get("reauth") === "1") {
+    return true;
+  }
+  if (!params.has("client_id") || !params.has("sig")) {
+    return false;
+  }
+  const promptTokens = (params.get("prompt") ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token !== "");
+  if (promptTokens.includes("login")) {
+    return true;
+  }
+  const maxAge = params.get("max_age");
+  return maxAge !== null && maxAge.trim() !== "";
+}
+
 export async function startGithubOAuthSignIn(
   callbackURL: string,
   errorCallbackURL?: string,
+  oauthQuery?: string,
 ): Promise<
   { readonly ok: true; readonly url: string } | { readonly ok: false; readonly message: string }
 > {
@@ -134,6 +189,9 @@ export async function startGithubOAuthSignIn(
         provider: "github",
         callbackURL,
         ...(errorCallbackURL !== undefined ? { errorCallbackURL } : {}),
+        ...(oauthQuery !== undefined && oauthQuery.trim() !== ""
+          ? { oauth_query: oauthQuery.trim() }
+          : {}),
       }),
     });
     const body = await readJsonSafely(res);
@@ -152,6 +210,35 @@ export async function startGithubOAuthSignIn(
     return {
       ok: false,
       message: "GitHub OAuth リクエストの送信に失敗しました。接続を確認してください。",
+    };
+  }
+}
+
+export async function signOutOwner(): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly message: string }
+> {
+  try {
+    const res = await fetch("/api/auth/sign-out", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    if (res.ok || res.status === 401) {
+      return { ok: true };
+    }
+    const body = await readJsonSafely(res);
+    return {
+      ok: false,
+      message: readString(body, "message") ?? `サインアウトに失敗しました (HTTP ${res.status})。`,
+    };
+  } catch {
+    return {
+      ok: false,
+      message: "サインアウトリクエストの送信に失敗しました。接続を確認してください。",
     };
   }
 }

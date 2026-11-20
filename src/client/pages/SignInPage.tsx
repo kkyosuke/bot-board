@@ -1,6 +1,12 @@
 import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
-import { checkOwnerAuthStatus, startGithubOAuthSignIn } from "../api/auth-client";
+import {
+  checkOwnerAuthStatus,
+  extractSignedOAuthQuery,
+  requiresForcedOAuthReauth,
+  signOutOwner,
+  startGithubOAuthSignIn,
+} from "../api/auth-client";
 import { isSafeRedirectUrl, normalizeSafeNextPath } from "../router";
 
 export interface SignInPageProps {
@@ -10,7 +16,10 @@ export interface SignInPageProps {
 
 type SignInViewState = "loading" | "normal" | "non_owner" | "approved" | "error";
 
-function resolvePostLoginDestination(search: string): {
+function resolvePostLoginDestination(
+  search: string,
+  signedOAuthQuery: string | null,
+): {
   readonly nextPath: string;
   readonly isOAuthFlow: boolean;
 } {
@@ -21,9 +30,9 @@ function resolvePostLoginDestination(search: string): {
     return { nextPath: safeNext, isOAuthFlow: safeNext.startsWith("/consent") };
   }
   // Better Auth redirects unauthenticated /api/auth/oauth2/authorize requests to /sign-in?<signed-oauth-query>
-  if (params.has("client_id") && params.has("sig")) {
+  if (params.has("client_id") && signedOAuthQuery !== null) {
     return {
-      nextPath: normalizeSafeNextPath(`/consent${search}`),
+      nextPath: normalizeSafeNextPath(`/consent?${signedOAuthQuery}`),
       isOAuthFlow: true,
     };
   }
@@ -53,19 +62,36 @@ function readQueryErrorNotice(
 
 export function SignInPage(props: SignInPageProps): ReactElement {
   const { search, onNavigate } = props;
-  const destination = useMemo(() => resolvePostLoginDestination(search), [search]);
+  const signedOAuthQuery = useMemo(() => extractSignedOAuthQuery(search), [search]);
+  const needsForcedReauth = useMemo(() => requiresForcedOAuthReauth(search), [search]);
+  const destination = useMemo(
+    () => resolvePostLoginDestination(search, signedOAuthQuery),
+    [search, signedOAuthQuery],
+  );
   const queryError = useMemo(() => readQueryErrorNotice(search), [search]);
 
   const [viewState, setViewState] = useState<SignInViewState>("loading");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
+  const [isAlreadySignedInReauth, setIsAlreadySignedInReauth] = useState<boolean>(false);
   const [statusNote, setStatusNote] = useState<string>("Better Auth セッションを確認しています…");
 
   const loadAuthState = useCallback(async (): Promise<void> => {
     setViewState("loading");
+    setIsAlreadySignedInReauth(false);
     setStatusNote("Better Auth セッションを確認しています…");
     const result = await checkOwnerAuthStatus();
     if (result.kind === "owner") {
+      if (needsForcedReauth) {
+        setIsAlreadySignedInReauth(true);
+        setViewState("normal");
+        setErrorMessage("");
+        setStatusNote(
+          "接続元クライアントから再認証（prompt=login / max_age）が要求されています。GitHub で再サインインしてください。",
+        );
+        return;
+      }
       setViewState("approved");
       setErrorMessage("");
       setStatusNote("単一オーナーセッション（OwnerContext）を確認しました。");
@@ -96,7 +122,7 @@ export function SignInPage(props: SignInPageProps): ReactElement {
         ? "サインイン完了後、OAuth 2.1 同意画面（/consent）へ戻ります。"
         : "サインイン完了後、判断カード画面（/）へ移動します。",
     );
-  }, [destination.isOAuthFlow, queryError]);
+  }, [destination.isOAuthFlow, needsForcedReauth, queryError]);
 
   useEffect(() => {
     void loadAuthState();
@@ -114,7 +140,11 @@ export function SignInPage(props: SignInPageProps): ReactElement {
         : destination.nextPath;
     const errorCallbackURL =
       typeof window !== "undefined" ? `${window.location.origin}/sign-in` : "/sign-in";
-    const res = await startGithubOAuthSignIn(callbackURL, errorCallbackURL);
+    const res = await startGithubOAuthSignIn(
+      callbackURL,
+      errorCallbackURL,
+      signedOAuthQuery ?? undefined,
+    );
     if (res.ok && isSafeRedirectUrl(res.url)) {
       window.location.assign(res.url);
       return;
@@ -123,7 +153,26 @@ export function SignInPage(props: SignInPageProps): ReactElement {
     setViewState("error");
     setErrorMessage(res.ok ? "不正なリダイレクト先が返却されました。" : res.message);
     setStatusNote("GitHub OAuth の開始に失敗しました。設定を確認して再試行してください。");
-  }, [destination.nextPath, isSubmitting]);
+  }, [destination.nextPath, isSubmitting, signedOAuthQuery]);
+
+  const handleSignOut = useCallback(async (): Promise<void> => {
+    if (isSigningOut) {
+      return;
+    }
+    setIsSigningOut(true);
+    const res = await signOutOwner();
+    setIsSigningOut(false);
+    if (!res.ok) {
+      setViewState("error");
+      setErrorMessage(res.message);
+      setStatusNote("サインアウトに失敗しました。再試行してください。");
+      return;
+    }
+    setIsAlreadySignedInReauth(false);
+    setViewState("normal");
+    setErrorMessage("");
+    setStatusNote("サインアウトしました。オーナーの GitHub アカウントで再度サインインできます。");
+  }, [isSigningOut]);
 
   return (
     <div
@@ -245,6 +294,22 @@ export function SignInPage(props: SignInPageProps): ReactElement {
               設定を開く
             </button>
           </div>
+          <button
+            type="button"
+            data-testid="sign-out-btn"
+            disabled={isSigningOut}
+            onClick={() => {
+              void handleSignOut();
+            }}
+            className="inline-flex min-h-[48px] min-w-[44px] w-full cursor-pointer items-center justify-center rounded-xl border px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              borderColor: "var(--border-default)",
+              backgroundColor: "var(--surface-card)",
+              color: "var(--ink-muted)",
+            }}
+          >
+            {isSigningOut ? "サインアウト中…" : "サインアウト"}
+          </button>
         </section>
       ) : (
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12 lg:gap-5">
@@ -273,11 +338,29 @@ export function SignInPage(props: SignInPageProps): ReactElement {
               </p>
             </div>
 
+            {isAlreadySignedInReauth ? (
+              <div
+                role="status"
+                data-testid="sign-in-reauth-notice"
+                className="space-y-1 rounded-xl border p-3 text-xs"
+                style={{
+                  borderColor: "var(--tone-info-border)",
+                  backgroundColor: "var(--tone-info-bg)",
+                }}
+              >
+                <div className="font-bold">再認証が必要です（prompt=login / max_age）</div>
+                <p className="leading-relaxed" style={{ color: "var(--ink-muted)" }}>
+                  接続元 OAuth クライアントが最新の再認証を要求しています。下のボタンからオーナーの
+                  GitHub アカウントで再サインインしてください。
+                </p>
+              </div>
+            ) : null}
+
             {viewState === "non_owner" ? (
               <div
                 role="alert"
                 data-testid="sign-in-non-owner-alert"
-                className="space-y-1 rounded-xl border p-3 text-xs"
+                className="space-y-2 rounded-xl border p-3 text-xs"
                 style={{
                   borderColor: "var(--tone-decline-border)",
                   backgroundColor: "var(--tone-decline-bg)",
@@ -289,6 +372,22 @@ export function SignInPage(props: SignInPageProps): ReactElement {
                 <p className="leading-relaxed" style={{ color: "var(--ink-muted)" }}>
                   {errorMessage}
                 </p>
+                <button
+                  type="button"
+                  data-testid="sign-out-btn"
+                  disabled={isSigningOut}
+                  onClick={() => {
+                    void handleSignOut();
+                  }}
+                  className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl border px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{
+                    borderColor: "var(--border-default)",
+                    backgroundColor: "var(--surface-card)",
+                    color: "var(--ink-primary)",
+                  }}
+                >
+                  {isSigningOut ? "サインアウト中…" : "現在のセッションをサインアウト"}
+                </button>
               </div>
             ) : viewState === "error" ? (
               <div
@@ -323,7 +422,11 @@ export function SignInPage(props: SignInPageProps): ReactElement {
                   color: "var(--accent-primary-ink)",
                 }}
               >
-                {isSubmitting ? "GitHub へ移動中…" : "GitHub でサインイン（MVP 認証方式）"}
+                {isSubmitting
+                  ? "GitHub へ移動中…"
+                  : isAlreadySignedInReauth
+                    ? "GitHub で再認証する"
+                    : "GitHub でサインイン（MVP 認証方式）"}
               </button>
               <p className="text-xs leading-relaxed" style={{ color: "var(--ink-muted)" }}>
                 ※ Passkey 等の追加認証方式は MVP
