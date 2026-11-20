@@ -1,0 +1,3 @@
+name: bot-board
+runtime: bun
+description: bot-board Cloudflare Workers, D1, Queues, Cron, Rate Limiting, and Routing infrastructure

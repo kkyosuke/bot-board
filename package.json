@@ -5,29 +5,41 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "build:worker": "bun build src/worker/index.ts --outdir dist/worker --target browser --format esm",
     "check": "bun check",
     "check:guardrails": "bun run scripts/check-guardrails.ts",
     "dev": "vite",
     "fmt": "bun fmt",
     "fmt:check": "bun fmt --check",
+    "infra:preview": "bun run infra/preview.ts",
     "lint": "bun lint",
     "prepare": "git config core.hooksPath .githooks || true",
     "preview": "vite preview",
     "test": "bun test",
     "test:e2e": "bunx playwright test",
-    "verify": "bun fmt --check && bun lint && bun check && bun run check:guardrails && bun test && bun run build"
+    "verify": "bun fmt --check && bun lint && bun check && bun run check:guardrails && bun test && bun run build && bun run build:worker && bun run infra:preview"
   },
   "dependencies": {
+    "@better-auth/mcp": "^1.7.27",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "better-auth": "^1.7.27",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.19",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261120.1",
     "@playwright/test": "^1.65.1",
+    "@pulumi/cloudflare": "^6.24.0",
+    "@pulumi/pulumi": "^3.277.0",
     "@tailwindcss/vite": "^4.3.5",
     "@types/bun": "^1.4.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "drizzle-kit": "^0.31.11",
     "tailwindcss": "^4.3.5",
     "vite": "^8.3.8"
   },

@@ -38,6 +38,10 @@ jobs:
         run: bun test
       - name: Build client bundle
         run: bun run build
+      - name: Build Cloudflare Worker bundle
+        run: bun run build:worker
+      - name: Validate Pulumi Cloudflare IaC
+        run: bun run infra:preview
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium
       - name: Run Playwright E2E suite

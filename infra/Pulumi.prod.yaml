@@ -1,0 +1,18 @@
+config:
+  bot-board:appEnv: prod
+  bot-board:rateLimitNamespaceId: "1002"
+  bot-board:rateLimitRequests: "60"
+  bot-board:rateLimitPeriodSeconds: "60"
+  bot-board:workerCpuMsLimit: "50"
+  # Required before `pulumi up` (set via `pulumi config set --secret`):
+  # - cloudflare:apiToken (or CLOUDFLARE_API_TOKEN env var)
+  # - bot-board:accountId
+  # - bot-board:zoneId
+  # - bot-board:hostname (e.g. bot-board.example.com)
+  # - bot-board:betterAuthUrl (e.g. https://bot-board.example.com)
+  # - bot-board:trustedOrigins (comma-separated HTTPS origins)
+  # - bot-board:ownerGithubId
+  # - bot-board:betterAuthSecret (--secret)
+  # - bot-board:githubClientId (--secret)
+  # - bot-board:githubClientSecret (--secret)
+  # - bot-board:xaiApiKey (--secret)

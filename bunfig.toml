@@ -39,6 +39,10 @@ reportUnusedDisableDirectives = "error"
 "no-restricted-imports" = ["error", {
   paths = [
     {
+      name = "bun:sqlite",
+      message = "bun:sqlite is restricted to src/db/sqlite.ts and tests/ to keep Cloudflare Workers bundles portable.",
+    },
+    {
       name = "drizzle-orm/d1",
       message = "D1 client creation is restricted to src/db/ (request-scoped).",
     },
@@ -153,6 +157,20 @@ reportUnusedDisableDirectives = "error"
     },
     {
       target = [
+        "./src/client",
+        "./src/domain",
+        "./src/services",
+        "./src/server",
+        "./src/worker",
+        "./src/adapters",
+        "./src/auth",
+        "./src/shared",
+      ],
+      from = "./src/db/sqlite.ts",
+      message = "src/db/sqlite.ts (bun:sqlite) cannot be imported into Workers-portable src/ modules.",
+    },
+    {
+      target = [
         "./src/services/bot",
         "./src/services/system",
         "./src/adapters",
@@ -244,6 +262,31 @@ rules = {
   "no-restricted-imports" = ["error", {
     paths = [
       {
+        name = "bun:sqlite",
+        message = "bun:sqlite is restricted to src/db/sqlite.ts and tests/.",
+      },
+      {
+        name = "better-auth",
+        message = "Better Auth initialization is restricted to src/auth/.",
+      },
+      {
+        name = "@better-auth/mcp",
+        message = "Better Auth MCP setup is restricted to src/auth/.",
+      },
+    ],
+    patterns = [{
+      group = ["better-auth/*", "@better-auth/*"],
+      message = "Better Auth modules and subpaths are restricted to src/auth/.",
+    }],
+  }],
+}
+
+[[lint.overrides]]
+files = ["src/db/sqlite.ts"]
+rules = {
+  "no-restricted-imports" = ["error", {
+    paths = [
+      {
         name = "better-auth",
         message = "Better Auth initialization is restricted to src/auth/.",
       },
@@ -264,6 +307,10 @@ files = ["src/auth/**"]
 rules = {
   "no-restricted-imports" = ["error", {
     paths = [
+      {
+        name = "bun:sqlite",
+        message = "bun:sqlite is restricted to src/db/sqlite.ts and tests/.",
+      },
       {
         name = "drizzle-orm/d1",
         message = "D1 client creation is restricted to src/db/.",
@@ -287,6 +334,26 @@ rules = {
 [[lint.overrides]]
 files = ["tests/**"]
 rules = {
+  "no-restricted-imports" = ["error", {
+    paths = [
+      {
+        name = "drizzle-orm/d1",
+        message = "D1 client creation is restricted to src/db/.",
+      },
+      {
+        name = "drizzle-orm/sqlite-proxy",
+        message = "SQLite client creation is restricted to src/db/.",
+      },
+      {
+        name = "better-auth",
+        message = "Better Auth initialization is restricted to src/auth/.",
+      },
+      {
+        name = "@better-auth/mcp",
+        message = "Better Auth MCP setup is restricted to src/auth/.",
+      },
+    ],
+  }],
   "@typescript-eslint/ban-ts-comment" = ["error", {
     "ts-expect-error" = "allow-with-description",
     "ts-ignore" = true,

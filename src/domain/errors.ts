@@ -23,14 +23,54 @@ export const BOT_SCOPES = [
 
 export type BotScope = (typeof BOT_SCOPES)[number];
 
+export type DomainErrorHttpStatus = 400 | 401 | 403 | 404 | 409 | 423 | 429;
+
+export interface DomainErrorDetails {
+  readonly replacementCardId?: string;
+  readonly currentVersion?: number;
+  readonly retryAfterSeconds?: number;
+  readonly reason?: string;
+}
+
+export function errorCodeToHttpStatus(code: ErrorCode): DomainErrorHttpStatus {
+  switch (code) {
+    case "VALIDATION_ERROR":
+      return 400;
+    case "NOT_AUTHORIZED":
+      return 403;
+    case "NOT_FOUND":
+      return 404;
+    case "IDEMPOTENCY_CONFLICT":
+    case "VERSION_CONFLICT":
+    case "LEASE_CONFLICT":
+    case "GROUP_LOCKED":
+    case "INVALID_TRANSITION":
+    case "STALE_PROPOSAL":
+      return 409;
+    case "WORKSPACE_PAUSED":
+      return 423;
+    case "RATE_LIMITED":
+      return 429;
+  }
+}
+
 export class DomainError extends Error {
   public readonly code: ErrorCode;
   public readonly retryable: boolean;
+  public readonly details?: DomainErrorDetails;
 
-  public constructor(code: ErrorCode, message: string, retryable = false) {
+  public constructor(
+    code: ErrorCode,
+    message: string,
+    retryable = false,
+    details?: DomainErrorDetails,
+  ) {
     super(message);
     this.name = "DomainError";
     this.code = code;
     this.retryable = retryable;
+    if (details !== undefined) {
+      this.details = details;
+    }
   }
 }
