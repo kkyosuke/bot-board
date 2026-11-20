@@ -82,7 +82,10 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
       return Promise.resolve(
         new Response(JSON.stringify({ ok: true, service: "bot-board" }), {
           status: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Content-Type-Options": "nosniff",
+          },
         }),
       );
     }
@@ -109,7 +112,13 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
             resource: `${url.origin}/api/mcp`,
             authorization_servers: [`${url.origin}/api/auth`],
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "Access-Control-Allow-Origin": "*",
+            },
+          },
         ),
       );
     }
@@ -118,6 +127,7 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
       url.pathname === "/.well-known/oauth-authorization-server" ||
       url.pathname === "/.well-known/oauth-authorization-server/api/auth" ||
       url.pathname === "/.well-known/openid-configuration" ||
+      url.pathname === "/.well-known/openid-configuration/api/auth" ||
       url.pathname === "/api/auth/.well-known/openid-configuration"
     ) {
       return Promise.resolve(
@@ -127,7 +137,13 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
             authorization_endpoint: `${url.origin}/api/auth/oauth2/authorize`,
             token_endpoint: `${url.origin}/api/auth/oauth2/token`,
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "Access-Control-Allow-Origin": "*",
+            },
+          },
         ),
       );
     }
@@ -139,7 +155,24 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
       return Promise.resolve(
         new Response(JSON.stringify({ keys: [{ kty: "OKP", crv: "Ed25519", kid: "k1" }] }), {
           status: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        }),
+      );
+    }
+
+    if (url.pathname === "/api/mcp" && method === "OPTIONS") {
+      return Promise.resolve(
+        new Response(null, {
+          status: 204,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Expose-Headers":
+              "WWW-Authenticate, Mcp-Session-Id, MCP-Protocol-Version",
+          },
         }),
       );
     }
@@ -150,7 +183,10 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
         return Promise.resolve(
           new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [] } }), {
             status: 200,
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "Access-Control-Allow-Origin": "*",
+            },
           }),
         );
       }
@@ -159,7 +195,10 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
           status: 401,
           headers: {
             "Content-Type": "application/json",
-            "WWW-Authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource"`,
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers":
+              "WWW-Authenticate, Mcp-Session-Id, MCP-Protocol-Version",
+            "WWW-Authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource/api/mcp", scope="tasks:read tasks:write proposals:write decisions:read"`,
           },
         }),
       );
@@ -169,7 +208,10 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
       return Promise.resolve(
         new Response(JSON.stringify({ code: "NOT_AUTHORIZED" }), {
           status: 401,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+          },
         }),
       );
     }
@@ -195,16 +237,13 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
         BOT_WORK_DLQ: {
           send: () => Promise.resolve(),
         },
+        // Bare HTML response without headers proves workerHandler.fetch injects SPA security headers itself
         ASSETS: {
           fetch: () =>
             Promise.resolve(
               new Response("<!doctype html><html><body>bot-board</body></html>", {
                 status: 200,
-                headers: {
-                  "Content-Type": "text/html; charset=utf-8",
-                  "X-Frame-Options": "DENY",
-                  "X-Content-Type-Options": "nosniff",
-                },
+                headers: { "Content-Type": "text/html; charset=utf-8" },
               }),
             ),
         },
@@ -237,7 +276,7 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
       const failed = report.checks.filter((c) => !c.ok);
       expect(failed).toEqual([]);
       expect(report.ok).toBe(true);
-      expect(report.checks.length).toBe(14);
+      expect(report.checks.length).toBe(16);
     } finally {
       sqliteDb.close();
     }
@@ -250,7 +289,7 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
       fetchImpl: buildMockLiveFetch(),
     });
     expect(okReport.ok).toBe(true);
-    expect(okReport.checks.length).toBe(15);
+    expect(okReport.checks.length).toBe(17);
 
     const failReport = await runLiveSmokeCheck({
       baseUrl: "https://staging.bot-board.example.com",

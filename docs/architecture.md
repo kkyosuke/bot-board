@@ -54,6 +54,8 @@ flowchart LR
 | `cloudflare.QueueConsumer` × 3                                                        | `decision-finalize`・`bot-work`・`bot-work-dlq` ごとに `batchSize`・`maxRetries`・`deadLetterQueue` を分離して Worker へ接続                                           |
 | `cloudflare.WorkersCronTrigger`                                                       | 1分周期で未処理の期限切れ `provisional`・`work_leases`・`decision_cards` 回収と、未消費 `decisions(consumed_at IS NULL)` 再配送を実行                                  |
 
+実デプロイ手順・Secrets 一覧・外部プラグイン接続パラメータは [Cloudflare デプロイ・外部プラグイン接続ランブック](deploy-and-plugins.md) を参照。
+
 ---
 
 ## 3. アプリケーションレイヤー境界

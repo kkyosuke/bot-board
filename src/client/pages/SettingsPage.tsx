@@ -2,6 +2,7 @@ import { type ReactElement, useCallback, useEffect, useId, useState } from "reac
 
 import { BOT_SCOPES, type BotScope, budgetLimitSchema, DomainError } from "@/domain";
 
+import { signOutOwner } from "../api/auth-client";
 import { ClientAuthError, ClientTransportError } from "../api/decision-client";
 import {
   createHumanWorkerBotApi,
@@ -70,8 +71,12 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
   // Per-bot mutation & 2-step revocation confirmation
   const [mutatingBotId, setMutatingBotId] = useState<string | null>(null);
   const [pendingRevokeBotId, setPendingRevokeBotId] = useState<string | null>(null);
+  const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
+  const [copiedMcpUrl, setCopiedMcpUrl] = useState<boolean>(false);
 
   const formIdPrefix = useId();
+  const mcpEndpointUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/api/mcp` : "/api/mcp";
 
   const handleAuthError = useCallback(
     (err: ClientAuthError): void => {
@@ -379,6 +384,35 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
     [handleAuthError, mutatingBotId],
   );
 
+  const handleSignOut = useCallback(async (): Promise<void> => {
+    if (isSigningOut) {
+      return;
+    }
+    setIsSigningOut(true);
+    setErrorBanner(null);
+    const res = await signOutOwner();
+    setIsSigningOut(false);
+    if (!res.ok) {
+      setErrorBanner(res.message);
+      return;
+    }
+    onNavigate("/sign-in", { replace: true });
+  }, [isSigningOut, onNavigate]);
+
+  const handleCopyMcpUrl = useCallback(async (): Promise<void> => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard !== undefined) {
+        await navigator.clipboard.writeText(mcpEndpointUrl);
+        setCopiedMcpUrl(true);
+        setStatusMessage(`Remote MCP エンドポイント URL をコピーしました: ${mcpEndpointUrl}`);
+        return;
+      }
+      setStatusMessage(`クリップボード未対応のため手動でコピーしてください: ${mcpEndpointUrl}`);
+    } catch {
+      setStatusMessage(`コピーに失敗しました。手動でコピーしてください: ${mcpEndpointUrl}`);
+    }
+  }, [mcpEndpointUrl]);
+
   const handleSelectNav = useCallback(
     (tab: NavTabId): void => {
       onNavigate(tab === "decide" ? "/" : `/${tab}`);
@@ -401,20 +435,38 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
               構造化上限・緊急一時停止・スコープ編集・2段階確認付き即時失効を管理します。
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              void loadAll();
-            }}
-            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl border px-3 text-xs font-semibold"
-            style={{
-              borderColor: "var(--border-default)",
-              backgroundColor: "var(--surface-card)",
-              color: "var(--ink-primary)",
-            }}
-          >
-            再読み込み
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                void loadAll();
+              }}
+              className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl border px-3 text-xs font-semibold"
+              style={{
+                borderColor: "var(--border-default)",
+                backgroundColor: "var(--surface-card)",
+                color: "var(--ink-primary)",
+              }}
+            >
+              再読み込み
+            </button>
+            <button
+              type="button"
+              data-testid="btn-settings-sign-out"
+              disabled={isSigningOut}
+              onClick={() => {
+                void handleSignOut();
+              }}
+              className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl border px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+              style={{
+                borderColor: "var(--border-default)",
+                backgroundColor: "var(--surface-subtle)",
+                color: "var(--ink-primary)",
+              }}
+            >
+              {isSigningOut ? "終了中…" : "サインアウト"}
+            </button>
+          </div>
         </header>
 
         {workspace?.is_paused === true ? (
@@ -755,6 +807,41 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
                   }}
                 >
                   {showIssueForm ? "発行フォームを閉じる" : "+ Worker Bearer 発行"}
+                </button>
+              </div>
+
+              <div
+                data-testid="settings-mcp-endpoint-box"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3"
+                style={{
+                  borderColor: "var(--border-subtle)",
+                  backgroundColor: "var(--surface-subtle)",
+                }}
+              >
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="font-bold">Remote MCP エンドポイント URL（OAuth 2.1）</div>
+                  <code
+                    data-testid="settings-mcp-endpoint-url"
+                    className="block truncate font-mono text-xs"
+                    style={{ color: "var(--ink-muted)" }}
+                  >
+                    {mcpEndpointUrl}
+                  </code>
+                </div>
+                <button
+                  type="button"
+                  data-testid="btn-copy-mcp-url"
+                  onClick={() => {
+                    void handleCopyMcpUrl();
+                  }}
+                  className="inline-flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-center rounded-xl border px-3 font-semibold"
+                  style={{
+                    borderColor: "var(--border-default)",
+                    backgroundColor: "var(--surface-card)",
+                    color: "var(--ink-primary)",
+                  }}
+                >
+                  {copiedMcpUrl ? "コピー済" : "URL をコピー"}
                 </button>
               </div>
 

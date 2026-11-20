@@ -240,4 +240,98 @@ test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BO
     await assertNoHorizontalOverflow(page);
     await assertAllVisibleButtonsAtLeast44px(page);
   });
+
+  test("handles prompt=login forced re-auth with oauth_query forwarding, Owner Sign-Out on /sign-in, and zero-scope warning on /consent (Sec-M3, Sec-M4, Sec-m5)", async ({
+    page,
+  }) => {
+    const signInPayloads: Record<string, unknown>[] = [];
+    let signOutCalls = 0;
+
+    await page.route("**/api/human/workspace", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "ws_1", is_paused: false, version: 1 }),
+      });
+    });
+
+    await page.route("**/api/auth/sign-in/social", async (route) => {
+      const raw: unknown = route.request().postDataJSON();
+      const parsed =
+        raw !== null && typeof raw === "object" && !Array.isArray(raw)
+          ? Object.fromEntries(Object.entries(raw))
+          : {};
+      signInPayloads.push(parsed);
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "Mock intercept after capturing oauth_query" }),
+      });
+    });
+
+    await page.route("**/api/auth/sign-out", async (route) => {
+      signOutCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ success: true }),
+      });
+    });
+
+    // 1. Authenticated owner visiting /sign-in with prompt=login MUST see re-auth notice + GitHub button (NOT approved loop)
+    const reauthQuery =
+      "client_id=client_mcp_1&prompt=login&ba_iat=1760000000000&ba_param=client_id&ba_param=prompt&ba_param=ba_iat&ba_param=ba_param&utm_source=noise&sig=sig_reauth";
+    await page.goto(`/sign-in?${reauthQuery}`);
+    await expect(page.getByTestId("sign-in-reauth-notice")).toBeVisible();
+    await expect(page.getByTestId("sign-in-approved")).toHaveCount(0);
+    await expect(page.getByTestId("github-sign-in-btn")).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+    await assertAllVisibleButtonsAtLeast44px(page);
+
+    // Clicking GitHub re-auth MUST forward filtered signed oauth_query (dropping utm_source)
+    await page.getByTestId("github-sign-in-btn").click();
+    await expect(page.getByTestId("sign-in-error-alert")).toBeVisible();
+    expect(signInPayloads.length).toBe(1);
+    const rawForwardedQuery = signInPayloads[0]?.["oauth_query"];
+    const forwardedQuery = typeof rawForwardedQuery === "string" ? rawForwardedQuery : "";
+    expect(forwardedQuery).toContain("client_id=client_mcp_1");
+    expect(forwardedQuery).toContain("prompt=login");
+    expect(forwardedQuery).toContain("sig=sig_reauth");
+    expect(forwardedQuery).not.toContain("utm_source");
+
+    // 2. Normal /sign-in when authenticated shows approved state with >=44px Sign-Out button
+    await page.goto("/sign-in");
+    await expect(page.getByTestId("sign-in-approved")).toBeVisible();
+    await expect(page.getByTestId("sign-out-btn")).toBeVisible();
+    await assertAllVisibleButtonsAtLeast44px(page);
+    await page.getByTestId("sign-out-btn").click();
+    await expect(page.getByTestId("github-sign-in-btn")).toBeVisible();
+    expect(signOutCalls).toBe(1);
+
+    // 3. Zero bot scopes on /consent renders explicit warning and disables Approve
+    await page.route("**/api/human/oauth/consent-context*", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          client_id: "client_oidc_only",
+          client_name: "OIDC-Only Client",
+          client_uri: "https://example.com",
+          redirect_uris: ["https://example.com/cb"],
+          requested_bot_scopes: [],
+          other_requested_scopes: ["openid", "profile"],
+          existing_bot_id: null,
+          existing_status: null,
+          existing_scopes: [],
+        }),
+      });
+    });
+
+    await page.goto("/consent?client_id=client_oidc_only&scope=openid+profile&sig=valid_sig");
+    await expect(page.getByTestId("consent-zero-scope-warning")).toBeVisible();
+    await expect(page.getByTestId("consent-approve-btn")).toBeDisabled();
+    await expect(page.getByTestId("consent-deny-btn")).toBeEnabled();
+    await assertNoHorizontalOverflow(page);
+    await assertAllVisibleButtonsAtLeast44px(page);
+  });
 });

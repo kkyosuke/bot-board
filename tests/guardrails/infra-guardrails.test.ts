@@ -53,6 +53,15 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
     expect(infraIndex).toContain("deadLetterQueue:");
     expect(infraIndex).toContain("export const d1DatabaseUuid");
     expect(infraIndex).toContain("export const publicUrl");
+
+    // Verify public/_headers exists and stays in exact line-by-line parity with STATIC_ASSETS_HEADERS
+    const publicHeadersPath = join(REPO_ROOT, "public", "_headers");
+    expect(existsSync(publicHeadersPath)).toBe(true);
+    const publicHeadersLines = readFileSync(publicHeadersPath, "utf8").trim().split(/\r?\n/);
+    expect(publicHeadersLines.length).toBeGreaterThanOrEqual(10);
+    for (const line of publicHeadersLines) {
+      expect(infraIndex).toContain(JSON.stringify(line));
+    }
   });
 
   test("Pulumi stack configs isolate rateLimitNamespaceId, enforce safe workerCpuMsLimit (5000..300000ms), and contain zero inline plaintext secrets (B2, M2)", () => {

@@ -6,7 +6,7 @@ import {
   type VerifiedBotContext,
   verifyBotConnectionContext,
 } from "@/auth/bot";
-import { type BotScope, DomainError } from "@/domain";
+import { BOT_SCOPES, type BotScope, DomainError } from "@/domain";
 import { mapErrorToHttpResponse } from "@/server/http-error";
 import { enforceRateLimit, type RequestRateLimiter } from "@/server/rate-limit";
 import {
@@ -132,11 +132,46 @@ async function runToolSafely(fn: () => Promise<unknown>): Promise<CallToolResult
   }
 }
 
+const MCP_SERVER_INSTRUCTIONS =
+  "bot-board MCP server for owner-supervised Bot workflows. Read workspace limits via get_workspace_context, inspect tasks with list_tasks/get_task/get_artifact, acquire an exclusive lease with claim_task (renew via renew_lease), record work with update_task, submit binary/single/multi human decision cards via submit_proposal (or replace pending/deferred cards via supersede_proposal), poll strictly finalized human decisions via list_decision_results, and finish with record_result. Human approval/decline/undo/defer and bot-connection management are never exposed via MCP (BOT-02).";
+
+const READ_ONLY_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const IDEMPOTENT_WRITE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const NON_IDEMPOTENT_WRITE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+const MCP_CORS_ALLOW_METHODS = "GET, POST, DELETE, OPTIONS";
+const MCP_CORS_ALLOW_HEADERS =
+  "Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID";
+const MCP_CORS_EXPOSE_HEADERS = "WWW-Authenticate, Mcp-Session-Id, MCP-Protocol-Version";
+const MCP_CORS_MAX_AGE = "86400";
+
 export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotContext): McpServer {
-  const server = new McpServer({
-    name: "bot-board",
-    version: "1.0.0",
-  });
+  const server = new McpServer(
+    {
+      name: "bot-board",
+      version: "1.0.0",
+    },
+    {
+      instructions: MCP_SERVER_INSTRUCTIONS,
+    },
+  );
 
   server.registerTool(
     "get_workspace_context",
@@ -145,6 +180,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "Read workspace goal, allowed scope, structured budget limits, pause state, and task status meanings from D1.",
       inputSchema: getWorkspaceContextInputSchema,
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async () => await runToolSafely(() => port.getWorkspaceContext(ctx)),
   );
@@ -155,6 +191,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       title: "List Tasks",
       description: "List tasks in the authorized workspace with cursor pagination.",
       inputSchema: listTasksInputSchema,
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.listTasks(ctx, args)),
   );
@@ -166,6 +203,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "Get task detail, latest version, active lease ownership, artifact summaries, and decision cards.",
       inputSchema: getTaskInputSchema,
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.getTask(ctx, args)),
   );
@@ -176,6 +214,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       title: "Get Artifact",
       description: "Fetch the full content or URL of an artifact by ID.",
       inputSchema: getArtifactInputSchema,
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.getArtifact(ctx, args)),
   );
@@ -187,6 +226,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "Create a new ready task in the authorized workspace (idempotent via request_id).",
       inputSchema: createTaskInputSchema,
+      annotations: IDEMPOTENT_WRITE_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.createTask(ctx, args)),
   );
@@ -197,6 +237,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       title: "Claim Task",
       description: "Acquire a time-bounded exclusive WorkLease on a ready task.",
       inputSchema: claimTaskInputSchema,
+      annotations: NON_IDEMPOTENT_WRITE_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.claimTask(ctx, args)),
   );
@@ -207,6 +248,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       title: "Renew Lease",
       description: "Extend the expiration time of an active WorkLease held by this Bot.",
       inputSchema: renewLeaseInputSchema,
+      annotations: IDEMPOTENT_WRITE_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.renewLease(ctx, args)),
   );
@@ -218,6 +260,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "Update running task description, blocked/ready transition, or upsert an artifact under an active lease.",
       inputSchema: updateTaskInputSchema,
+      annotations: IDEMPOTENT_WRITE_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.updateTask(ctx, args)),
   );
@@ -229,6 +272,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "Submit 1..N decision cards (binary/single/multi) for human swipe review and release the WorkLease.",
       inputSchema: submitProposalInputSchema,
+      annotations: IDEMPOTENT_WRITE_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.submitProposal(ctx, args)),
   );
@@ -240,6 +284,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "Atomically replace a pending/deferred decision card with a newer card (rejected while provisional).",
       inputSchema: supersedeProposalInputSchema,
+      annotations: IDEMPOTENT_WRITE_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.supersedeProposal(ctx, args)),
   );
@@ -251,6 +296,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "List strictly finalized human decisions (status='finalized' only; provisional decisions are never returned).",
       inputSchema: listDecisionResultsInputSchema,
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.listDecisionResults(ctx, args)),
   );
@@ -262,6 +308,7 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
       description:
         "Record task execution result, optional artifact, failure reason, and consumed decision_id.",
       inputSchema: recordResultInputSchema,
+      annotations: IDEMPOTENT_WRITE_TOOL_ANNOTATIONS,
     },
     async (args) => await runToolSafely(() => port.recordResult(ctx, args)),
   );
@@ -269,10 +316,44 @@ export function createBotMcpServer(port: McpBotServicePort, ctx: VerifiedBotCont
   return server;
 }
 
-function buildWwwAuthenticateHeader(requestUrl: string, publicBaseUrl?: string): string {
+function buildWwwAuthenticateHeader(
+  requestUrl: string,
+  publicBaseUrl: string | undefined,
+  hasAuthorizationHeader: boolean,
+): string {
   const trimmedBase = publicBaseUrl?.trim() ?? "";
-  const origin = trimmedBase !== "" ? trimmedBase.replace(/\/+$/, "") : new URL(requestUrl).origin;
-  return `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`;
+  const origin = trimmedBase !== "" ? new URL(trimmedBase).origin : new URL(requestUrl).origin;
+  const resourceMetadata = `${origin}/.well-known/oauth-protected-resource/api/mcp`;
+  const scopes = BOT_SCOPES.join(" ");
+  if (hasAuthorizationHeader) {
+    return `Bearer error="invalid_token", resource_metadata="${resourceMetadata}", scope="${scopes}"`;
+  }
+  return `Bearer resource_metadata="${resourceMetadata}", scope="${scopes}"`;
+}
+
+function withMcpCorsHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Expose-Headers", MCP_CORS_EXPOSE_HEADERS);
+  headers.delete("Access-Control-Allow-Credentials");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function buildMcpPreflightResponse(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": MCP_CORS_ALLOW_METHODS,
+      "Access-Control-Allow-Headers": MCP_CORS_ALLOW_HEADERS,
+      "Access-Control-Expose-Headers": MCP_CORS_EXPOSE_HEADERS,
+      "Access-Control-Max-Age": MCP_CORS_MAX_AGE,
+    },
+  });
 }
 
 function deriveRateLimitKey(req: Request): string {
@@ -285,38 +366,65 @@ export function mountMcpRoutes(app: Hono, options: McpRouteOptions): void {
   const handleMcp = async (c: {
     readonly req: { readonly raw: Request; header(name: string): string | undefined };
   }): Promise<Response> => {
-    await enforceRateLimit(options.rateLimiter, deriveRateLimitKey(c.req.raw));
-
-    let botCtx: VerifiedBotContext;
     try {
-      botCtx = await options.port.authenticate(c.req.header("authorization") ?? null);
-    } catch (error) {
-      if (error instanceof DomainError && error.code === "NOT_AUTHORIZED") {
-        return new Response(
-          JSON.stringify({
-            code: "NOT_AUTHORIZED",
-            message: error.message,
-            retryable: false,
-          }),
-          {
-            status: 401,
-            headers: {
-              "Content-Type": "application/json",
-              "WWW-Authenticate": buildWwwAuthenticateHeader(c.req.raw.url, options.publicBaseUrl),
-            },
-          },
-        );
+      await enforceRateLimit(options.rateLimiter, deriveRateLimitKey(c.req.raw));
+
+      const rawAuthHeader = c.req.header("authorization") ?? null;
+      const hasAuthorizationHeader = rawAuthHeader !== null && rawAuthHeader.trim() !== "";
+
+      let botCtx: VerifiedBotContext;
+      try {
+        botCtx = await options.port.authenticate(rawAuthHeader);
+      } catch (error) {
+        if (error instanceof DomainError && error.code === "NOT_AUTHORIZED") {
+          return withMcpCorsHeaders(
+            new Response(
+              JSON.stringify({
+                code: "NOT_AUTHORIZED",
+                message: error.message,
+                retryable: false,
+              }),
+              {
+                status: 401,
+                headers: {
+                  "Content-Type": "application/json",
+                  "WWW-Authenticate": buildWwwAuthenticateHeader(
+                    c.req.raw.url,
+                    options.publicBaseUrl,
+                    hasAuthorizationHeader,
+                  ),
+                },
+              },
+            ),
+          );
+        }
+        throw error;
       }
-      throw error;
+
+      await enforceRateLimit(options.rateLimiter, `mcp:bot:${botCtx.botConnectionId}`);
+
+      const mcpHandler = createMcpHandler(() => createBotMcpServer(options.port, botCtx));
+      const mcpResponse = await mcpHandler.fetch(c.req.raw);
+      return withMcpCorsHeaders(mcpResponse);
+    } catch (error) {
+      const mapped = mapErrorToHttpResponse(error);
+      const headers = new Headers({ "Content-Type": "application/json" });
+      if (mapped.body.details?.retryAfterSeconds !== undefined) {
+        headers.set("Retry-After", String(mapped.body.details.retryAfterSeconds));
+      }
+      return withMcpCorsHeaders(
+        new Response(JSON.stringify(mapped.body), {
+          status: mapped.status,
+          headers,
+        }),
+      );
     }
-
-    await enforceRateLimit(options.rateLimiter, `mcp:bot:${botCtx.botConnectionId}`);
-
-    const mcpHandler = createMcpHandler(() => createBotMcpServer(options.port, botCtx));
-    return await mcpHandler.fetch(c.req.raw);
   };
 
-  app.post("/api/mcp", handleMcp);
-  app.get("/api/mcp", handleMcp);
-  app.delete("/api/mcp", handleMcp);
+  for (const path of ["/api/mcp", "/api/mcp/"] as const) {
+    app.options(path, () => buildMcpPreflightResponse());
+    app.post(path, handleMcp);
+    app.get(path, handleMcp);
+    app.delete(path, handleMcp);
+  }
 }
