@@ -33,37 +33,37 @@ flowchart LR
 
 ## 3. GitHub Secrets → GitHub Actions → Cloudflare Secrets 自動デプロイ
 
-GitHub リポジトリの **`Settings → Environments`** に `staging` と `prod` 環境を作成し、以下を登録して Actions タブの **`Deploy to Cloudflare`** を実行すると、ローカルでの `pulumi config set` 不要で Cloudflare Worker Secrets まで一括同期される（ローカルから `pulumi config set` で設定した値がある場合は Pulumi 側が優先される）。
+GitHub リポジトリの **`Settings → Environments`** に **`staging`**（`staging` スタック用）および **`prd-deploy`**（`prod` スタック用）環境を作成し、以下を登録して Actions タブの **`Deploy to Cloudflare`** を実行すると、ローカルでの `pulumi config set` 不要で Cloudflare Worker Secrets まで一括同期される（Repository Secrets / Variables に登録した共通値も自動継承され、ローカルから `pulumi config set` で設定した値がある場合は Pulumi 側が優先される）。
 
 ### 3.1 GitHub Environment Secrets（必ず Secrets へ登録・`vars.*` 禁止）
 
-| GitHub Secret 名                              | 反映先（Cloudflare / Runner）             | 必須条件                                                                                        |
-| --------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`                        | GitHub Actions（Pulumi / D1 API）         | 必須（`staging` / `prod`）                                                                      |
-| `PULUMI_ACCESS_TOKEN`                         | GitHub Actions（Pulumi Cloud 状態保存）   | Pulumi Cloud 利用時は必須（セルフホスト時は `PULUMI_BACKEND_URL` + `PULUMI_CONFIG_PASSPHRASE`） |
-| `PULUMI_BACKEND_URL`                          | GitHub Actions（セルフホスト Backend）    | セルフホスト Backend（R2/S3等）利用時のみ                                                       |
-| `PULUMI_CONFIG_PASSPHRASE`                    | GitHub Actions（セルフホスト暗号化鍵）    | セルフホスト Backend 利用時は必須（空値時は `infra/deploy.ts` が実行前に拒否）                  |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | GitHub Actions（R2/S3 Backend 認証）      | R2/S3 セルフホスト Backend（`s3://...`）利用時のみ                                              |
-| `BETTER_AUTH_SECRET`                          | Cloudflare Worker Secret（`secret_text`） | 必須（`staging` / `prod`、16 文字以上）                                                         |
-| `GITHUB_CLIENT_ID`                            | Cloudflare Worker Secret（`secret_text`） | 必須（`staging` / `prod`）                                                                      |
-| `GITHUB_CLIENT_SECRET`                        | Cloudflare Worker Secret（`secret_text`） | 必須（`staging` / `prod`）                                                                      |
-| `GEMINI_API_KEY`                              | Cloudflare Worker Secret（`secret_text`） | `WORKER_LLM_PROVIDER=gemini` 時は `prod` 必須（`staging` 任意・月次枠はキー側で制限可）         |
-| `XAI_API_KEY`                                 | Cloudflare Worker Secret（`secret_text`） | `WORKER_LLM_PROVIDER=grok` 時は `prod` 必須（`staging` 任意）                                   |
-| `META_MODEL_API_KEY`                          | Cloudflare Worker Secret（`secret_text`） | `WORKER_LLM_PROVIDER=meta-muse` 時は `prod` 必須（`staging` 任意）                              |
-| `SMOKE_BOT_TOKEN`                             | GitHub Actions（デプロイ後 MCP スモーク） | 任意（`/settings` で発行した Worker Bearer）                                                    |
+| GitHub Secret 名                                                | 反映先（Cloudflare / Runner）             | 必須条件                                                                                                                                                              |
+| --------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`                                          | GitHub Actions（Pulumi / D1 API）         | 必須（`staging` / `prd-deploy`）                                                                                                                                      |
+| `PULUMI_ACCESS_TOKEN`                                           | GitHub Actions（Pulumi Cloud 状態保存）   | Pulumi Cloud 利用時は必須（R2 等セルフホスト時は未設定とし、代わりに `PULUMI_BACKEND_URL` + `PULUMI_CONFIG_PASSPHRASE` を使用）                                       |
+| `PULUMI_BACKEND_URL`                                            | GitHub Actions（セルフホスト Backend）    | セルフホスト Backend（R2/S3等：`s3://<bucket>?endpoint=https://<accountId>.r2.cloudflarestorage.com&region=auto&s3ForcePathStyle=true`）利用時のみ                    |
+| `PULUMI_CONFIG_PASSPHRASE`                                      | GitHub Actions（セルフホスト暗号化鍵）    | セルフホスト Backend 利用時は必須（空値時は `infra/deploy.ts` が実行前に拒否）                                                                                        |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`                   | GitHub Actions（R2/S3 Backend 認証）      | R2/S3 セルフホスト Backend（`s3://...`）利用時のみ                                                                                                                    |
+| `BETTER_AUTH_SECRET`                                            | Cloudflare Worker Secret（`secret_text`） | 必須（`staging` / `prd-deploy`、16 文字以上）                                                                                                                         |
+| `GITHUB_CLIENT_ID`                                              | Cloudflare Worker Secret（`secret_text`） | 必須（`staging` / `prd-deploy`）                                                                                                                                      |
+| `GITHUB_CLIENT_SECRET`                                          | Cloudflare Worker Secret（`secret_text`） | 必須（`staging` / `prd-deploy`）                                                                                                                                      |
+| `GEMINI_API_KEY`（GitHub Actions 別名 `GOOGLE_GEMINI_API_KEY`） | Cloudflare Worker Secret（`secret_text`） | `WORKER_LLM_PROVIDER=gemini` 時は `prd-deploy`（`prod` スタック）必須（`staging` 任意・月次枠はキー側で制限可。ローカル `bun run deploy` は `GEMINI_API_KEY` を参照） |
+| `XAI_API_KEY`                                                   | Cloudflare Worker Secret（`secret_text`） | `WORKER_LLM_PROVIDER=grok` 時は `prd-deploy`（`prod` スタック）必須（`staging` 任意）                                                                                 |
+| `META_MODEL_API_KEY`                                            | Cloudflare Worker Secret（`secret_text`） | `WORKER_LLM_PROVIDER=meta-muse` 時は `prd-deploy`（`prod` スタック）必須（`staging` 任意）                                                                            |
+| `SMOKE_BOT_TOKEN`                                               | GitHub Actions（デプロイ後 MCP スモーク） | 任意（`/settings` で発行した Worker Bearer）                                                                                                                          |
 
 ### 3.2 GitHub Environment Variables（または Secrets でも可）
 
-| 変数名（Pulumi Config 名）                   | 必須条件    | 設定例 / デフォルト                                                                   |
-| -------------------------------------------- | ----------- | ------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_ACCOUNT_ID`（`accountId`）       | 必須        | Cloudflare Account ID                                                                 |
-| `BETTER_AUTH_URL`（`betterAuthUrl`）         | 必須        | `https://bot-board-staging.<subdomain>.workers.dev` / `https://bot-board.example.com` |
-| `OWNER_GITHUB_ID`（`ownerGithubId`）         | 必須        | 単一オーナーの数値 GitHub ID（`gh api user --jq .id`）                                |
-| `WORKER_LLM_PROVIDER`（`workerLlmProvider`） | 任意        | `gemini` / `grok` / `meta-muse`（未設定時は登録済み API キーから自動選択）            |
-| `GEMINI_MODEL`（`geminiModel`）              | 任意        | `gemini-3.5-flash-lite`（デフォルト）または `gemini-3.8-flash`                        |
-| `XAI_MODEL` / `META_MODEL`                   | 任意        | `grok-3-mini`（既定） / `muse-spark-1.3`（既定）                                      |
-| `TRUSTED_ORIGINS`（`trustedOrigins`）        | 任意        | カンマ区切り許可 Origin（未設定時は `BETTER_AUTH_URL`）                               |
-| `CLOUDFLARE_ZONE_ID` / `CUSTOM_HOSTNAME`     | `prod` 必須 | カスタムドメイン公開先（`CUSTOM_HOSTNAME` は `BETTER_AUTH_URL` のホスト名と一致必須） |
+| 変数名（Pulumi Config 名）                   | 必須条件                   | 設定例 / デフォルト                                                                   |
+| -------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_ACCOUNT_ID`（`accountId`）       | 必須                       | Cloudflare Account ID                                                                 |
+| `BETTER_AUTH_URL`（`betterAuthUrl`）         | 必須                       | `https://bot-board-staging.<subdomain>.workers.dev` / `https://bot-board.example.com` |
+| `OWNER_GITHUB_ID`（`ownerGithubId`）         | 必須                       | 単一オーナーの数値 GitHub ID（`gh api user --jq .id`）                                |
+| `WORKER_LLM_PROVIDER`（`workerLlmProvider`） | 任意                       | `gemini` / `grok` / `meta-muse`（未設定時は登録済み API キーから自動選択）            |
+| `GEMINI_MODEL`（`geminiModel`）              | 任意                       | `gemini-3.5-flash-lite`（デフォルト）または `gemini-3.8-flash`                        |
+| `XAI_MODEL` / `META_MODEL`                   | 任意                       | `grok-3-mini`（既定） / `muse-spark-1.3`（既定）                                      |
+| `TRUSTED_ORIGINS`（`trustedOrigins`）        | 任意                       | カンマ区切り許可 Origin（未設定時は `BETTER_AUTH_URL`）                               |
+| `CLOUDFLARE_ZONE_ID` / `CUSTOM_HOSTNAME`     | `prd-deploy`（`prod`）必須 | カスタムドメイン公開先（`CUSTOM_HOSTNAME` は `BETTER_AUTH_URL` のホスト名と一致必須） |
 
 ### 3.3 デプロイ実行経路（4 ステップ自動実行）
 
