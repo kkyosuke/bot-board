@@ -39,10 +39,17 @@ import {
 } from "./components/DetailPanel";
 import { SheetModal } from "./components/SheetModal";
 import { type ProvisionalToastEntry, UndoBanner } from "./components/UndoBanner";
+import { ConsentPage } from "./pages/ConsentPage";
+import { SignInPage } from "./pages/SignInPage";
+import { type AppRoute, useSpaRouter } from "./router";
 
 export interface AppProps {
   readonly client?: DecisionCardClient;
   readonly initialViewState?: BoardViewState;
+}
+
+interface DecisionBoardPageProps extends AppProps {
+  readonly onNavigate: (to: string, options?: { readonly replace?: boolean }) => void;
 }
 
 interface ActiveDragState {
@@ -59,7 +66,7 @@ interface StoredProvisionalState extends ProvisionalToastEntry {
   readonly checkedOptionIds: readonly string[] | undefined;
 }
 
-type OpenSheetMode = "detail" | "deferred" | "connect_hint" | "upcoming_nav" | null;
+type OpenSheetMode = "detail" | "deferred" | null;
 type InspectorTab = "detail" | "log";
 
 function formatClockNow(): string {
@@ -111,7 +118,8 @@ function formatDecisionLabel(
   return `${checkedCount}件を採用仮確定`;
 }
 
-export function App(props: AppProps): ReactElement {
+function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
+  const { onNavigate } = props;
   const clientRef = useRef<DecisionCardClient | null>(null);
   if (clientRef.current === null) {
     clientRef.current = props.client ?? createMockDecisionClient();
@@ -869,12 +877,24 @@ export function App(props: AppProps): ReactElement {
     handleToggleOption,
   ]);
 
-  const handleSelectNav = useCallback((tab: NavTabId): void => {
-    if (tab === "decide") {
-      return;
-    }
-    setOpenSheet(tab === "settings" ? "connect_hint" : "upcoming_nav");
-  }, []);
+  const handleSelectNav = useCallback(
+    (tab: NavTabId): void => {
+      if (tab === "decide") {
+        onNavigate("/");
+        return;
+      }
+      if (tab === "board") {
+        onNavigate("/board");
+        return;
+      }
+      if (tab === "history") {
+        onNavigate("/history");
+        return;
+      }
+      onNavigate("/settings");
+    },
+    [onNavigate],
+  );
 
   const handleCloseSheet = useCallback((): void => {
     setOpenSheet(null);
@@ -1063,7 +1083,7 @@ export function App(props: AppProps): ReactElement {
                 deferredCount={deferredCards.length}
                 onOpenDeferred={() => setOpenSheet("deferred")}
                 onResetDemo={() => void handleResetDemo()}
-                onOpenConnectHint={() => setOpenSheet("connect_hint")}
+                onOpenConnectHint={() => onNavigate("/settings")}
               />
             ) : (
               pendingCards
@@ -1234,17 +1254,99 @@ export function App(props: AppProps): ReactElement {
           </div>
         )}
       </SheetModal>
-
-      <SheetModal
-        open={openSheet === "connect_hint" || openSheet === "upcoming_nav"}
-        title={openSheet === "connect_hint" ? "接続・初期設定（S4 / S6）" : "補助画面（S6 予定）"}
-        testId="nav-info-sheet"
-        onClose={handleCloseSheet}
-      >
-        <p className="text-xs leading-relaxed" style={{ color: "var(--ink-muted)" }}>
-          「状況（読み取り専用カンバン）」「履歴」「Bot接続・権限設定」画面は次のスライス（S6）で実装予定です。日常の判断操作はこの「判断」画面のスワイプとボタンだけで完結します。
-        </p>
-      </SheetModal>
     </div>
   );
+}
+
+interface SecondaryRoutePlaceholderProps {
+  readonly route: Exclude<AppRoute, "/" | "/sign-in" | "/consent">;
+  readonly onNavigate: (to: string, options?: { readonly replace?: boolean }) => void;
+}
+
+function SecondaryRoutePlaceholder(props: SecondaryRoutePlaceholderProps): ReactElement {
+  const { route, onNavigate } = props;
+  const activeTab: NavTabId =
+    route === "/board" ? "board" : route === "/history" ? "history" : "settings";
+  const label =
+    route === "/board"
+      ? "状況（読み取り専用カンバン）"
+      : route === "/history"
+        ? "判断履歴"
+        : "ワークスペース・Bot接続設定";
+
+  const handleSelectNav = (tab: NavTabId): void => {
+    if (tab === "decide") {
+      onNavigate("/");
+      return;
+    }
+    onNavigate(`/${tab}`);
+  };
+
+  return (
+    <div
+      className="mx-auto flex min-h-dvh w-full max-w-[960px] flex-col justify-between px-3 py-4 sm:px-5 sm:py-6"
+      data-testid={`route-shell-${activeTab}`}
+    >
+      <section
+        className="space-y-3 rounded-2xl border p-5 bb-card-shadow"
+        style={{
+          borderColor: "var(--border-default)",
+          backgroundColor: "var(--surface-card)",
+        }}
+      >
+        <div className="text-xs font-semibold" style={{ color: "var(--ink-muted)" }}>
+          {route}
+        </div>
+        <h1 className="text-base font-bold">{label}</h1>
+        <p className="text-xs leading-relaxed" style={{ color: "var(--ink-muted)" }}>
+          共通 SPA ルーターに接続済みです。補助画面 UI の本実装は次スライス（S6）で追加されます。
+        </p>
+        <div className="flex flex-wrap gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => onNavigate("/")}
+            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl px-4 text-xs font-bold"
+            style={{
+              backgroundColor: "var(--accent-primary)",
+              color: "var(--accent-primary-ink)",
+            }}
+          >
+            判断画面へ戻る
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate("/sign-in")}
+            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl border px-4 text-xs font-semibold"
+            style={{
+              borderColor: "var(--border-default)",
+              backgroundColor: "var(--surface-subtle)",
+              color: "var(--ink-primary)",
+            }}
+          >
+            オーナー認証（/sign-in）
+          </button>
+        </div>
+      </section>
+      <BottomNav activeTab={activeTab} onSelectTab={handleSelectNav} />
+    </div>
+  );
+}
+
+export function App(props: AppProps): ReactElement {
+  const { location, navigate } = useSpaRouter();
+
+  if (location.route === "/sign-in") {
+    return <SignInPage search={location.search} onNavigate={navigate} />;
+  }
+  if (location.route === "/consent") {
+    return <ConsentPage search={location.search} onNavigate={navigate} />;
+  }
+  if (
+    location.route === "/board" ||
+    location.route === "/history" ||
+    location.route === "/settings"
+  ) {
+    return <SecondaryRoutePlaceholder route={location.route} onNavigate={navigate} />;
+  }
+  return <DecisionBoardPage {...props} onNavigate={navigate} />;
 }

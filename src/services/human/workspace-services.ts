@@ -24,6 +24,8 @@ import {
   createWorkerBotInputSchema,
   type ListHumanHistoryQuery,
   listHumanHistoryQuerySchema,
+  type OAuthConsentContextQuery,
+  oauthConsentContextQuerySchema,
   type RetryHumanTaskInput,
   retryHumanTaskInputSchema,
   type UpdateHumanBotInput,
@@ -1031,7 +1033,7 @@ export async function updateHumanBot(
               params: [nowMs, bot.oauthClientId, ctx.userId],
             },
             {
-              sql: "UPDATE oauthRefreshToken SET revoked = ? WHERE clientId = ? AND userId = ? AND revoked IS NULL",
+              sql: "UPDATE oauthRefreshToken SET revoked = COALESCE(revoked, ?), rotationReplayResponse = NULL, rotationReplayExpiresAt = NULL WHERE clientId = ? AND userId = ?",
               params: [nowMs, bot.oauthClientId, ctx.userId],
             },
             {
@@ -1114,4 +1116,115 @@ export async function updateHumanBot(
       return receipt;
     },
   );
+}
+
+export interface HumanOAuthConsentContextDto {
+  readonly client_id: string;
+  readonly client_name: string;
+  readonly client_uri: string | null;
+  readonly redirect_uris: readonly string[];
+  readonly requested_bot_scopes: readonly BotScope[];
+  readonly other_requested_scopes: readonly string[];
+  readonly existing_bot_id: string | null;
+  readonly existing_status: "active" | "paused" | "revoked" | null;
+  readonly existing_scopes: readonly BotScope[];
+}
+
+function parseRedirectUris(raw: string): readonly string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (item): item is string => typeof item === "string" && item.trim() !== "",
+      );
+    }
+  } catch {
+    // Fall back to comma/space splitting if non-JSON format
+  }
+  return raw
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+}
+
+export async function getHumanOAuthConsentContext(
+  db: AppDatabase,
+  ctx: OwnerContext,
+  rawQuery: OAuthConsentContextQuery,
+): Promise<HumanOAuthConsentContextDto> {
+  const query = oauthConsentContextQuerySchema.parse(rawQuery);
+
+  const client = await db.orm
+    .select({
+      clientId: schema.oauthClient.clientId,
+      name: schema.oauthClient.name,
+      uri: schema.oauthClient.uri,
+      redirectUris: schema.oauthClient.redirectUris,
+      disabled: schema.oauthClient.disabled,
+    })
+    .from(schema.oauthClient)
+    .where(eq(schema.oauthClient.clientId, query.client_id))
+    .get();
+
+  if (client === undefined || client.disabled === true) {
+    throw new DomainError(
+      "NOT_FOUND",
+      `OAuth client "${query.client_id}" is not registered or has been disabled.`,
+      false,
+    );
+  }
+
+  const existingBot = await db.orm
+    .select({
+      id: schema.botConnections.id,
+      status: schema.botConnections.status,
+      scopes: schema.botConnections.scopes,
+    })
+    .from(schema.botConnections)
+    .where(
+      and(
+        eq(schema.botConnections.workspaceId, ctx.workspaceId),
+        eq(schema.botConnections.channelType, "mcp_oauth"),
+        eq(schema.botConnections.oauthClientId, client.clientId),
+      ),
+    )
+    .get();
+
+  const rawTokens =
+    query.scope !== undefined
+      ? query.scope
+          .split(/\s+/)
+          .map((s) => s.trim())
+          .filter((s) => s !== "")
+      : [];
+  const requestedBotScopes: BotScope[] = [];
+  const otherRequestedScopes: string[] = [];
+
+  for (const token of rawTokens) {
+    const matched = BOT_SCOPES.find((s) => s === token);
+    if (matched !== undefined) {
+      if (!requestedBotScopes.includes(matched)) {
+        requestedBotScopes.push(matched);
+      }
+    } else if (!otherRequestedScopes.includes(token)) {
+      otherRequestedScopes.push(token);
+    }
+  }
+
+  const effectiveRequestedBotScopes: readonly BotScope[] =
+    rawTokens.length === 0 ? [...BOT_SCOPES] : requestedBotScopes;
+
+  const existingStatus = existingBot !== undefined ? parseBotStatus(existingBot.status) : null;
+
+  return {
+    client_id: client.clientId,
+    client_name: client.name?.trim() || client.clientId,
+    client_uri: client.uri ?? null,
+    redirect_uris: parseRedirectUris(client.redirectUris),
+    requested_bot_scopes: effectiveRequestedBotScopes,
+    other_requested_scopes: otherRequestedScopes,
+    existing_bot_id: existingBot?.id ?? null,
+    existing_status: existingStatus,
+    existing_scopes: existingBot !== undefined ? parseStoredScopes(existingBot.scopes) : [],
+  };
 }

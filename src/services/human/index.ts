@@ -28,6 +28,7 @@ import {
   type DeferHumanCardInput,
   type ListHumanCardsQuery,
   type ListHumanHistoryQuery,
+  type OAuthConsentContextQuery,
   type RetryHumanTaskInput,
   type UndoHumanCardInput,
   type UpdateHumanBotInput,
@@ -37,6 +38,7 @@ import {
   createWorkerBot,
   type CreateWorkerBotResult,
   getHumanBoard,
+  getHumanOAuthConsentContext,
   getHumanWorkspace,
   type HumanBoardBotSummary,
   type HumanBoardResult,
@@ -44,6 +46,7 @@ import {
   type HumanBotConnectionView,
   type HumanHistoryItem,
   type HumanHistoryResult,
+  type HumanOAuthConsentContextDto,
   type HumanWorkspaceServiceDeps,
   type HumanWorkspaceView,
   listHumanBots,
@@ -66,6 +69,7 @@ export {
   type DeferHumanCardInput,
   getHumanBoard,
   getHumanCardDetail,
+  getHumanOAuthConsentContext,
   getHumanWorkspace,
   type HumanBoardBotSummary,
   type HumanBoardResult,
@@ -78,6 +82,7 @@ export {
   type HumanDeferCardResult,
   type HumanHistoryItem,
   type HumanHistoryResult,
+  type HumanOAuthConsentContextDto,
   type HumanUndoCardResult,
   type HumanWorkspaceServiceDeps,
   type HumanWorkspaceView,
@@ -86,6 +91,7 @@ export {
   type ListHumanCardsQuery,
   listHumanHistory,
   type ListHumanHistoryQuery,
+  type OAuthConsentContextQuery,
   PROVISIONAL_WINDOW_MS,
   type ProvisionalCardView,
   retryHumanTask,
@@ -141,6 +147,10 @@ export interface HumanServicePort {
     botId: string,
     input: UpdateHumanBotInput,
   ): Promise<UpdateHumanBotResult>;
+  getOAuthConsentContext(
+    ctx: OwnerContext,
+    query: OAuthConsentContextQuery,
+  ): Promise<HumanOAuthConsentContextDto>;
 }
 
 export type CreateHumanServicePortOptions = HumanCardServiceDeps & HumanWorkspaceServiceDeps;
@@ -188,6 +198,9 @@ export function createHumanServicePort(
     },
     updateBot(ctx, botId, input) {
       return updateHumanBot(db, ctx, botId, input, options);
+    },
+    getOAuthConsentContext(ctx, query) {
+      return getHumanOAuthConsentContext(db, ctx, query);
     },
   };
 }
@@ -243,6 +256,9 @@ export function createHumanServicePortFromD1(
     },
     updateBot(ctx, botId, input) {
       return getPort().updateBot(ctx, botId, input);
+    },
+    getOAuthConsentContext(ctx, query) {
+      return getPort().getOAuthConsentContext(ctx, query);
     },
   };
 }

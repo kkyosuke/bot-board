@@ -1,6 +1,6 @@
 # Bot連携・状態設計
 
-作成日：2026-11-18 ／ 状態：実装基準（S2 `/api/mcp` 12ツール・D1認可境界、S3 Better Auth・Human API 13本・5秒確定 実装済 ／ S4 同意UI・S7 自律ワーカー・実機実証 未実施）
+作成日：2026-11-18 ／ 状態：実装基準（S2 `/api/mcp` 12ツール・S3 Human API・5秒確定・S4 OAuth 2.1/DCR/同意UI・JWT検証 コード実装済 ／ 検証環境デプロイ・S7 自律ワーカー・実機実証 未実施）
 
 [企画・要件書](concept.md)の「Botが管理し、人はスワイプで選択する」を実現するための構成。仕様名・操作名は本アプリの提案であり、各社製品の既存API名ではない。
 
@@ -91,6 +91,7 @@ flowchart TD
 | `GET /api/human/history`                                                       | 履歴画面：確定済みの採用・見送り・成果・イベント一覧                                                                                              | 所有者セッション、カーソルページング                                                                                                                                           |
 | `GET /api/human/workspace`<br>`PATCH /api/human/workspace`                     | 初回設定・目的・許可範囲・上限・緊急一時停止（`is_paused`）の取得・更新                                                                           | 更新時は所有者セッション、Hono CSRF、`expected_version`、`request_id`                                                                                                          |
 | `GET /api/human/bots`<br>`POST /api/human/bots`<br>`PATCH /api/human/bots/:id` | Bot接続一覧・Worker Bearer発行・`scopes` 変更・一時停止（`paused`）・失効（`revoked`）                                                            | 更新時は所有者セッション、Hono CSRF、`expected_version`、`request_id`                                                                                                          |
+| `GET /api/human/oauth/consent-context`                                         | OAuth 2.1 同意画面（`/consent`）向けクライアント情報・要求スコープ・既存接続状態取得                                                              | 所有者セッション、`oauth_client` 登録確認、`workspace_id` 境界照合                                                                                                             |
 
 ### 停止・失効・スコープ境界（毎リクエストD1強制）
 
