@@ -6,14 +6,24 @@ export interface BoardStateCardProps {
   readonly viewState: Exclude<BoardViewState, "normal" | "offline_error">;
   readonly clearedCount: number;
   readonly deferredCount: number;
+  readonly isLiveMode?: boolean;
+  readonly runningTaskCount?: number;
   readonly onOpenDeferred: () => void;
   readonly onResetDemo: () => void;
   readonly onOpenConnectHint: () => void;
 }
 
 export function BoardStateCard(props: BoardStateCardProps): ReactElement {
-  const { viewState, clearedCount, deferredCount, onOpenDeferred, onResetDemo, onOpenConnectHint } =
-    props;
+  const {
+    viewState,
+    clearedCount,
+    deferredCount,
+    isLiveMode = false,
+    runningTaskCount = 0,
+    onOpenDeferred,
+    onResetDemo,
+    onOpenConnectHint,
+  } = props;
 
   if (viewState === "loading") {
     return (
@@ -134,7 +144,7 @@ export function BoardStateCard(props: BoardStateCardProps): ReactElement {
               borderColor: "var(--border-default)",
             }}
           >
-            サンプル6件をもう一度試す
+            {isLiveMode ? "最新を再取得" : "サンプル6件をもう一度試す"}
           </button>
         </div>
       </div>
@@ -179,21 +189,53 @@ export function BoardStateCard(props: BoardStateCardProps): ReactElement {
             現在、人の判断待ちカードは0件です。方針確認や成果受入が必要になると自動で届きます。
           </p>
         </div>
-        <div
-          className="w-full max-w-xs space-y-1 rounded-xl border p-3 text-left text-xs"
-          style={{
-            backgroundColor: "var(--surface-subtle)",
-            borderColor: "var(--border-subtle)",
-          }}
-        >
-          <div className="flex justify-between font-semibold">
-            <span>Claude</span>
-            <span style={{ color: "var(--ink-muted)" }}>実行中</span>
+        {isLiveMode ? (
+          <div
+            className="w-full max-w-xs space-y-2 rounded-xl border p-3 text-left text-xs"
+            style={{
+              backgroundColor: "var(--surface-subtle)",
+              borderColor: "var(--border-subtle)",
+            }}
+          >
+            <div className="flex justify-between font-semibold">
+              <span>稼働中タスク</span>
+              <span className="tabular-nums" style={{ color: "var(--accent-link)" }}>
+                {runningTaskCount} 件実行中
+              </span>
+            </div>
+            <div style={{ color: "var(--ink-muted)" }}>
+              進行状況や失敗理由は状況画面（/board）で確認できます。
+            </div>
+            <button
+              type="button"
+              data-testid="btn-running-refresh"
+              onClick={onResetDemo}
+              className="mt-1 inline-flex min-h-[44px] w-full cursor-pointer items-center justify-center rounded-xl border px-3 text-xs font-semibold"
+              style={{
+                backgroundColor: "var(--surface-card)",
+                borderColor: "var(--border-default)",
+              }}
+            >
+              最新を再取得
+            </button>
           </div>
-          <div style={{ color: "var(--ink-muted)" }}>
-            担当タスク：認証設計ドキュメントの下書き作成
+        ) : (
+          <div
+            className="w-full max-w-xs space-y-1 rounded-xl border p-3 text-left text-xs"
+            style={{
+              backgroundColor: "var(--surface-subtle)",
+              borderColor: "var(--border-subtle)",
+            }}
+          >
+            <div className="flex justify-between font-semibold">
+              <span>Claude</span>
+              <span style={{ color: "var(--ink-muted)" }}>実行中</span>
+            </div>
+            <div style={{ color: "var(--ink-muted)" }}>
+              担当タスク：認証設計ドキュメントの下書き作成
+            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   }

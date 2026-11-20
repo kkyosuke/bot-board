@@ -33,7 +33,7 @@ test.describe("S5 Main Decision Card UI (UX-01〜05, DEC-01, DEC-04)", () => {
   test("renders readable task cards, before-action outcomes across all 3 selection modes (UX-03), >=44px targets for all visible buttons, and zero horizontal overflow", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/?mode=mock");
 
     const topCard = page.getByTestId("top-decision-card");
     await expect(topCard).toBeVisible();
@@ -71,7 +71,7 @@ test.describe("S5 Main Decision Card UI (UX-01〜05, DEC-01, DEC-04)", () => {
     page,
     viewport,
   }) => {
-    await page.goto("/");
+    await page.goto("/?mode=mock");
 
     const topCard = page.getByTestId("top-decision-card");
     await expect(topCard).toBeVisible();
@@ -130,7 +130,7 @@ test.describe("S5 Main Decision Card UI (UX-01〜05, DEC-01, DEC-04)", () => {
   test("supports right/left swipe, 5s undo with selection restoration (DEC-01), single/multi rules (DEC-04), defer/restore, and modal Escape", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/?mode=mock");
 
     const topCard = page.getByTestId("top-decision-card");
     await expect(topCard).toBeVisible();
@@ -260,7 +260,7 @@ test.describe("S5 Main Decision Card UI (UX-01〜05, DEC-01, DEC-04)", () => {
     viewport,
   }) => {
     if (viewport !== null && viewport.width >= 1024) {
-      await page.goto("/");
+      await page.goto("/?mode=mock");
       await expect(page.getByTestId("pc-inspector")).toBeVisible();
       await expect(page.getByTestId("top-decision-card")).toBeVisible();
 
@@ -301,19 +301,19 @@ test.describe("S5 Main Decision Card UI (UX-01〜05, DEC-01, DEC-04)", () => {
     }
 
     // Verify loading, empty, bot_running, bot_disconnected, and offline_error states
-    await page.goto("/?state=loading");
+    await page.goto("/?mode=mock&state=loading");
     await expect(page.getByTestId("state-card-loading")).toBeVisible();
 
-    await page.goto("/?state=empty");
+    await page.goto("/?mode=mock&state=empty");
     await expect(page.getByTestId("state-card-empty")).toBeVisible();
 
-    await page.goto("/?state=bot_running");
+    await page.goto("/?mode=mock&state=bot_running");
     await expect(page.getByTestId("state-card-bot-running")).toBeVisible();
 
-    await page.goto("/?state=bot_disconnected");
+    await page.goto("/?mode=mock&state=bot_disconnected");
     await expect(page.getByTestId("state-card-bot-disconnected")).toBeVisible();
 
-    await page.goto("/?state=offline_error");
+    await page.goto("/?mode=mock&state=offline_error");
     await expect(page.getByTestId("offline-banner")).toBeVisible();
     await expect(page.getByTestId("top-decision-card")).toBeVisible();
     await page.getByTestId("btn-accept").click();
