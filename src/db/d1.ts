@@ -129,9 +129,15 @@ export function createDrizzleFromExecutor(executor: SqlExecutor): SqliteRemoteDa
  * unaliased duplicate column names across JOINs and integer-named columns.
  */
 export function createD1SqlExecutor(d1: D1LikeDatabase): SqlExecutor {
+  const prepareBound = (sql: string, params: readonly SqlParam[]): D1LikePreparedStatement => {
+    const stmt = d1.prepare(sql);
+    const bindValues = toD1BindValues(params);
+    return bindValues.length > 0 ? stmt.bind(...bindValues) : stmt;
+  };
+
   return {
     async query(sql, params, method) {
-      const bound = d1.prepare(sql).bind(...toD1BindValues(params));
+      const bound = prepareBound(sql, params);
       if (method === "run") {
         const result = await bound.run();
         const changes = result.meta?.changes ?? 0;
@@ -161,9 +167,10 @@ export function createD1SqlExecutor(d1: D1LikeDatabase): SqlExecutor {
     },
 
     async batch(statements) {
-      const prepared = statements.map((stmt) =>
-        d1.prepare(stmt.sql).bind(...toD1BindValues(stmt.params ?? [])),
-      );
+      if (statements.length === 0) {
+        return [];
+      }
+      const prepared = statements.map((stmt) => prepareBound(stmt.sql, stmt.params ?? []));
       const d1Results = await d1.batch(prepared);
       const output: SqlQueryResult[] = [];
       for (const res of d1Results) {

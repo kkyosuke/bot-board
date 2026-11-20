@@ -173,4 +173,36 @@ describe("Cloudflare D1 executor & Drizzle batch adapter (B2, B3, M7)", () => {
     expect(missing).toBeUndefined();
     expect(updated).toMatchObject({ changes: 1, meta: { changes: 1 } });
   });
+
+  test("short-circuits empty batch([]) without calling d1.batch and matches nested error.cause in guardedBatch (M5)", async () => {
+    let batchCalled = false;
+    const emptyGuardD1: D1LikeDatabase = {
+      prepare() {
+        throw new Error("prepare should not be called for empty batch");
+      },
+      batch() {
+        batchCalled = true;
+        throw new Error("D1_ERROR: empty batch");
+      },
+      exec() {
+        return Promise.resolve({ count: 0, duration: 0 });
+      },
+    };
+    const executor = createD1SqlExecutor(emptyGuardD1);
+    const res = await executor.batch([]);
+    expect(res).toEqual([]);
+    expect(batchCalled).toBe(false);
+
+    // Nested error.cause CHECK constraint abort is caught cleanly by guardedBatch
+    const nestedErr = new Error("D1_ERROR: batch failed", {
+      cause: new Error("CHECK constraint failed: chk_batch_guard_ok"),
+    });
+    const { d1: failingD1 } = createMockD1({ batchError: nestedErr });
+    const failingExecutor = createD1SqlExecutor(failingD1);
+    const outcome = await guardedBatch(failingExecutor, {
+      parentUpdate: { sql: "UPDATE tasks SET version = version + 1 WHERE id = ?", params: ["t-1"] },
+      followUps: [],
+    });
+    expect(outcome).toEqual({ applied: false, parentChanges: 0 });
+  });
 });

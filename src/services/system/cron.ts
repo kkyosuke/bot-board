@@ -218,6 +218,15 @@ export async function expireOverdueDecisionCards(
  * in unpaused workspaces that have at least one active worker_bearer bot and no active WorkLease.
  * (M2: orders DESC so the latest resolved decision wins; Minor 5: skips MCP-only workspaces.)
  */
+function hasTasksWriteScope(scopesJson: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(scopesJson);
+    return Array.isArray(parsed) && parsed.includes("tasks:write");
+  } catch {
+    return false;
+  }
+}
+
 export async function redispatchUnconsumedDecisions(
   db: AppDatabase,
   options: CronMaintenanceOptions = {},
@@ -229,7 +238,10 @@ export async function redispatchUnconsumedDecisions(
   const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
 
   const activeWorkerWorkspaces = await db.orm
-    .select({ workspaceId: schema.botConnections.workspaceId })
+    .select({
+      workspaceId: schema.botConnections.workspaceId,
+      scopes: schema.botConnections.scopes,
+    })
     .from(schema.botConnections)
     .where(
       and(
@@ -239,7 +251,9 @@ export async function redispatchUnconsumedDecisions(
     )
     .all();
 
-  const eligibleWorkspaceIds = new Set(activeWorkerWorkspaces.map((w) => w.workspaceId));
+  const eligibleWorkspaceIds = new Set(
+    activeWorkerWorkspaces.filter((w) => hasTasksWriteScope(w.scopes)).map((w) => w.workspaceId),
+  );
   if (eligibleWorkspaceIds.size === 0) {
     return 0;
   }

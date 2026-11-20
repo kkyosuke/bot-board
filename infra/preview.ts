@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-const repoRoot = resolve(import.meta.dir, "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const workerBundle = resolve(repoRoot, "dist", "worker", "index.js");
 const clientIndex = resolve(repoRoot, "dist", "client", "index.html");
+const infraOutFile = resolve(repoRoot, "dist", "infra", "index.mjs");
 
 if (!existsSync(workerBundle)) {
   throw new Error(
@@ -13,6 +14,34 @@ if (!existsSync(workerBundle)) {
 
 if (!existsSync(clientIndex)) {
   throw new Error(`Missing built client assets at ${clientIndex}. Run "bun run build" first.`);
+}
+
+// Always compile the Node.js ESM Pulumi entrypoint (dist/infra/index.mjs) and verify syntax under real Node.js
+const bundleCheck = await Bun.build({
+  entrypoints: [resolve(repoRoot, "infra", "index.ts")],
+  outdir: resolve(repoRoot, "dist", "infra"),
+  naming: "index.mjs",
+  target: "node",
+  format: "esm",
+  external: ["@pulumi/pulumi", "@pulumi/cloudflare"],
+});
+
+if (!bundleCheck.success) {
+  for (const log of bundleCheck.logs) {
+    process.stderr.write(`${log.message}\n`);
+  }
+  process.exit(1);
+}
+
+const nodeBin = Bun.which("node");
+if (nodeBin !== null) {
+  const syntaxCheck = Bun.spawnSync([nodeBin, "--check", infraOutFile], {
+    stdio: ["inherit", "inherit", "inherit"],
+  });
+  if (syntaxCheck.exitCode !== 0) {
+    process.stderr.write(`Node.js syntax check failed for ${infraOutFile}.\n`);
+    process.exit(syntaxCheck.exitCode);
+  }
 }
 
 const hasCloudflareToken =
@@ -45,20 +74,6 @@ if (pulumiBin !== null && hasCloudflareToken && hasPulumiBackend) {
   process.exit(result.exitCode);
 }
 
-// Offline / unauthenticated CI fallback: verify Pulumi program bundles cleanly with Bun
-const bundleCheck = await Bun.build({
-  entrypoints: [resolve(repoRoot, "infra", "index.ts")],
-  target: "bun",
-  external: ["@pulumi/pulumi", "@pulumi/cloudflare"],
-});
-
-if (!bundleCheck.success) {
-  for (const log of bundleCheck.logs) {
-    process.stderr.write(`${log.message}\n`);
-  }
-  process.exit(1);
-}
-
 process.stdout.write(
-  "infra/index.ts verified (offline mode: set CLOUDFLARE_API_TOKEN + PULUMI_ACCESS_TOKEN + pulumi CLI for live `pulumi preview`).\n",
+  "✓ infra/index.ts compiled to dist/infra/index.mjs and verified under Node.js (offline mode: set CLOUDFLARE_API_TOKEN + PULUMI_ACCESS_TOKEN + pulumi CLI for live `pulumi preview`).\n",
 );

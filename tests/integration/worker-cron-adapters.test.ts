@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { type Message, type MessageBatch } from "@cloudflare/workers-types";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import {
   createGrokModelAdapter,
@@ -1531,6 +1531,19 @@ describe("S7 Autonomous Worker (bot-work / bot-work-dlq), 4-Duty Cron & Budget E
     expect(revokedBatch.actions[0]?.acked).toBe(1);
     expect(revokedAdapterCalls).toBe(0);
 
+    // Minor 1: An active worker_bearer WITHOUT tasks:write scope is skipped by Cron Duty #4 (prevents infinite re-dispatch)
+    await f.sqliteDb.orm
+      .update(schema.botConnections)
+      .set({ status: "active", scopes: JSON.stringify(["tasks:read", "decisions:read"]) })
+      .where(eq(schema.botConnections.id, f.workerBotId));
+
+    f.botWorkQueueSent.length = 0;
+    const readOnlyWorkerReport = await handleScheduledTrigger(
+      { cron: "* * * * *", scheduledTime: f.getNow() + 61_000 },
+      { DB: f.d1, BOT_WORK_QUEUE: f.botWorkQueue },
+    );
+    expect(readOnlyWorkerReport.redispatchedDecisionsCount).toBe(0);
+
     // Prefixed queue dispatch smoke check
     const prefixedDlq = createQueueBatch("bot-board-staging-bot-work-dlq", [], f.getNow());
     await workerHandler.queue(
@@ -1543,5 +1556,75 @@ describe("S7 Autonomous Worker (bot-work / bot-work-dlq), 4-Duty Cron & Budget E
       },
       { waitUntil() {} },
     );
+  });
+
+  test("refreshes post-LLM wall-clock timestamps and uses deterministic subtask request_ids (M4, Minor 2)", async () => {
+    const f = await setupWorkerFixture();
+
+    const created = await createTask(
+      f.db,
+      f.botCtx,
+      {
+        request_id: "m4-create-1",
+        title: "Slow Model Step Task",
+        description: "Verify post-LLM timestamp refresh and idempotent subtask creation",
+        requires_approval: true,
+      },
+      Date.now(),
+    );
+
+    const startWallMs = Date.now();
+    const slowAdapter = createScriptedModelAdapter("slow-subtask-adapter", async () => {
+      await Bun.sleep(25);
+      return {
+        action: "update_task",
+        status: "ready",
+        description: "Decomposed into 1 subtask",
+        subtasks: [
+          {
+            title: "Deterministic Subtask",
+            description: "Should not duplicate on retry",
+            requires_approval: true,
+          },
+        ],
+        estimated_cost_cents: 1,
+      };
+    });
+
+    const batch = createQueueBatch(
+      "bot-work",
+      [{ task_id: created.task_id, workspace_id: f.workspaceId }],
+      startWallMs,
+    );
+    // Omit nowMs so worker-step computes real wall-clock before and after executeStep()
+    await handleBotWorkBatch(batch.batch, { DB: f.d1, MODEL_ADAPTER: slowAdapter });
+    expect(batch.actions[0]?.acked).toBe(1);
+
+    const stepEvent = await f.sqliteDb.orm
+      .select()
+      .from(schema.events)
+      .where(
+        and(
+          eq(schema.events.entityId, created.task_id),
+          eq(schema.events.action, "worker.step_executed"),
+        ),
+      )
+      .get();
+    expect(stepEvent).toBeDefined();
+    expect(stepEvent?.createdAt ?? 0).toBeGreaterThanOrEqual(startWallMs + 20);
+
+    // Verify subtask idempotency key uses deterministic request_id (no random suffix)
+    const subKey = await f.sqliteDb.orm
+      .select()
+      .from(schema.idempotencyKeys)
+      .where(
+        and(
+          eq(schema.idempotencyKeys.workspaceId, f.workspaceId),
+          eq(schema.idempotencyKeys.operation, "create_task"),
+          eq(schema.idempotencyKeys.requestId, `worker-sub-${created.task_id}-v2-0`),
+        ),
+      )
+      .get();
+    expect(subKey).toBeDefined();
   });
 });

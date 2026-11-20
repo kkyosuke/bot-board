@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 
-import { type AppDatabase, type RawSqlStatement, schema } from "@/db";
+import { type AppDatabase, collectErrorMessages, type RawSqlStatement, schema } from "@/db";
 import { DomainError, type ErrorCode } from "@/domain";
 
 export type ActorType = "human" | "bot" | "system";
@@ -150,13 +150,10 @@ export function buildInsertIdempotencyKeySql(
 }
 
 export function isIdempotencyUniqueViolation(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const msg = error.message;
-  return (
-    msg.includes("UNIQUE constraint failed") &&
-    (msg.includes("idempotency_keys") || msg.includes("request_id"))
+  return collectErrorMessages(error).some(
+    (msg) =>
+      msg.includes("UNIQUE constraint failed") &&
+      (msg.includes("idempotency_keys") || msg.includes("request_id")),
   );
 }
 

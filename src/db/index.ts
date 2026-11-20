@@ -12,6 +12,7 @@ export {
 } from "./d1";
 export {
   BATCH_GUARD_SQL,
+  collectErrorMessages,
   createEmptyGetQueryResult,
   didParentMutationApply,
   guardedBatch,

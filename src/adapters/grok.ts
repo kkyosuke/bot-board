@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { CARD_TYPES, ON_DECLINE_POLICIES, SELECTION_MODES } from "@/domain";
+
 import {
   assertModelTimeoutWithinLease,
   type BoundedModelStepOptions,
@@ -13,6 +15,7 @@ import {
 
 export const DEFAULT_XAI_CHAT_COMPLETIONS_URL = "https://api.x.ai/v1/chat/completions";
 export const DEFAULT_GROK_MODEL = "grok-3-mini";
+export const DEFAULT_GROK_MAX_COMPLETION_TOKENS = 2048;
 
 export interface GrokAdapterConfig {
   readonly apiKey: string;
@@ -26,7 +29,7 @@ const xaiChatResponseSchema = z.object({
     .array(
       z.object({
         message: z.object({
-          content: z.string(),
+          content: z.string().nullable(),
         }),
       }),
     )
@@ -36,19 +39,56 @@ const xaiChatResponseSchema = z.object({
       prompt_tokens: z.number().int().min(0).optional(),
       completion_tokens: z.number().int().min(0).optional(),
       total_tokens: z.number().int().min(0).optional(),
+      completion_tokens_details: z
+        .object({
+          reasoning_tokens: z.number().int().min(0).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });
 
-const GROK_SYSTEM_PROMPT = [
+const CARD_TYPES_ENUM_STR = CARD_TYPES.map((v) => JSON.stringify(v)).join("|");
+const SELECTION_MODES_ENUM_STR = SELECTION_MODES.map((v) => JSON.stringify(v)).join("|");
+const ON_DECLINE_POLICIES_ENUM_STR = ON_DECLINE_POLICIES.map((v) => JSON.stringify(v)).join("|");
+
+export const GROK_SYSTEM_PROMPT = [
   "You are a bounded autonomous worker step for bot-board.",
   "Never assume authority to approve human decision cards or execute external side effects.",
-  "Return ONLY a single valid JSON object matching one of 3 actions:",
-  '1) {"action":"submit_proposal","artifact"?:{...},"proposals":[...],"estimated_cost_cents":number}',
-  '2) {"action":"record_result","outcome":"success"|"failed","summary"?:string,"status_reason"?:string,"artifact"?:{...},"estimated_cost_cents":number}',
-  '3) {"action":"update_task","status":"ready"|"blocked","description"?:string,"status_reason"?:string,"artifact"?:{...},"subtasks"?:[...],"estimated_cost_cents":number}',
-  "If task.requires_approval is true, NEVER return record_result(outcome='success'); instead submit a deliverable proposal with submit_proposal.",
+  "Return ONLY a single valid JSON object (no markdown fences, no extra keys outside this contract).",
+  "Every object uses strict validation: unknown keys are rejected, and estimated_cost_cents MUST be a non-negative integer.",
+  "",
+  "Shared nested object schemas:",
+  '- artifact (optional): {"title":string(1..160),"kind":string(1..64),"summary":string(1..1000),"content_or_url":string(1..100000),"id"?:string,"expected_version"?:integer>=1}. If "id" is included, "expected_version" is REQUIRED.',
+  '- factor: {"label":string(1..80),"value":string(1..200)}',
+  '- option: {"id":string(1..64),"title":string(1..120),"summary":string(1..300),"meta":string(1..120),"badge"?:string(1..40),"recommended"?:boolean}',
+  `- proposal: {"card_type":${CARD_TYPES_ENUM_STR},"selection_mode":${SELECTION_MODES_ENUM_STR},"title":string(1..160),"summary":string(1..1000),"on_accept_effect":string(1..300),"on_decline_effect":string(1..300),"on_decline_policy":${ON_DECLINE_POLICIES_ENUM_STR},"factors":factor[],"options"?:option[],"target_artifact_id"?:string,"expires_in_seconds"?:integer(60..2592000)}.`,
+  '  Rules: if selection_mode is "binary", OMIT "options". If selection_mode is "single" or "multi", "options" MUST contain >=2 items with unique "id" values. If proposals.length > 1, every proposal MUST share the same on_decline_policy.',
+  '- subtask: {"title":string(1..200),"description":string(0..4000),"requires_approval":boolean}',
+  "",
+  "Allowed top-level action objects (choose exactly ONE):",
+  '1) {"action":"submit_proposal","selection_group_id"?:string,"artifact"?:artifact,"proposals":proposal[](1..5),"estimated_cost_cents":integer>=0}',
+  '2) {"action":"record_result","outcome":"success"|"failed","summary"?:string(0..2000),"status_reason"?:string(0..500),"artifact"?:artifact,"estimated_cost_cents":integer>=0}',
+  '3) {"action":"update_task","status":"ready"|"blocked","description"?:string(0..4000),"status_reason"?:string(0..500),"artifact"?:artifact,"subtasks"?:subtask[](0..5),"estimated_cost_cents":integer>=0}',
+  "",
+  'CRITICAL: If task.requires_approval is true, NEVER return {"action":"record_result","outcome":"success"}; submit a "deliverable" proposal using submit_proposal instead.',
 ].join("\n");
+
+function stripJsonMarkdownFence(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?\s*```$/i.exec(trimmed);
+  return fenced?.[1]?.trim() ?? trimmed;
+}
+
+function formatSanitizedZodIssues(issues: readonly z.core.$ZodIssue[]): string {
+  return issues
+    .slice(0, 5)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.map(String).join(".") : "$";
+      return `${path}:${issue.code}`;
+    })
+    .join(", ");
+}
 
 function estimateCostCentsFromUsage(
   usage:
@@ -56,19 +96,26 @@ function estimateCostCentsFromUsage(
         readonly prompt_tokens?: number | undefined;
         readonly completion_tokens?: number | undefined;
         readonly total_tokens?: number | undefined;
+        readonly completion_tokens_details?:
+          | {
+              readonly reasoning_tokens?: number | undefined;
+            }
+          | undefined;
       }
     | undefined,
 ): number {
+  const reasoningTokens = usage?.completion_tokens_details?.reasoning_tokens ?? 0;
   if (
     usage === undefined ||
     (usage.total_tokens === undefined &&
       usage.prompt_tokens === undefined &&
-      usage.completion_tokens === undefined)
+      usage.completion_tokens === undefined &&
+      reasoningTokens === 0)
   ) {
     return 1;
   }
-  const totalTokens =
-    usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
+  const summedParts = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0) + reasoningTokens;
+  const totalTokens = Math.max(usage.total_tokens ?? 0, summedParts);
   if (totalTokens <= 0) {
     return 0;
   }
@@ -145,6 +192,18 @@ export function createGrokModelAdapter(config: GrokAdapterConfig): ModelAdapter 
         );
       }
 
+      const requestPayload = {
+        model,
+        temperature: 0.2,
+        max_completion_tokens: DEFAULT_GROK_MAX_COMPLETION_TOKENS,
+        ...(model.startsWith("grok-3-mini") ? { reasoning_effort: "low" } : {}),
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: GROK_SYSTEM_PROMPT },
+          { role: "user", content: buildSanitizedUserPayload(context) },
+        ],
+      };
+
       let response: Response;
       try {
         response = await fetchFn(endpointUrl, {
@@ -154,15 +213,7 @@ export function createGrokModelAdapter(config: GrokAdapterConfig): ModelAdapter 
             Accept: "application/json",
             Authorization: `Bearer ${trimmedKey}`,
           },
-          body: JSON.stringify({
-            model,
-            temperature: 0.2,
-            response_format: { type: "json_object" },
-            messages: [
-              { role: "system", content: GROK_SYSTEM_PROMPT },
-              { role: "user", content: buildSanitizedUserPayload(context) },
-            ],
-          }),
+          body: JSON.stringify(requestPayload),
           signal: AbortSignal.timeout(options.timeoutMs),
         });
       } catch (error) {
@@ -212,14 +263,23 @@ export function createGrokModelAdapter(config: GrokAdapterConfig): ModelAdapter 
         throw new ModelAdapterError(
           "permanent",
           "SCHEMA_INVALID",
-          "xAI Grok API response envelope did not match expected chat completions schema.",
+          `xAI Grok API response envelope did not match expected chat completions schema (${formatSanitizedZodIssues(envelope.error.issues)}).`,
         );
       }
 
-      const contentText = envelope.data.choices[0]?.message.content ?? "";
+      const rawContent = envelope.data.choices[0]?.message.content;
+      if (rawContent === null || rawContent === undefined || rawContent.trim() === "") {
+        throw new ModelAdapterError(
+          "permanent",
+          "SCHEMA_INVALID",
+          "xAI Grok API returned empty or null message content.",
+        );
+      }
+
+      const cleanedContent = stripJsonMarkdownFence(rawContent);
       let parsedContent: unknown;
       try {
-        parsedContent = JSON.parse(contentText);
+        parsedContent = JSON.parse(cleanedContent);
       } catch {
         throw new ModelAdapterError(
           "permanent",
@@ -233,7 +293,7 @@ export function createGrokModelAdapter(config: GrokAdapterConfig): ModelAdapter 
         throw new ModelAdapterError(
           "permanent",
           "SCHEMA_INVALID",
-          "xAI Grok model step output violated bounded step schema.",
+          `xAI Grok model step output violated bounded step schema (${formatSanitizedZodIssues(stepResult.error.issues)}).`,
         );
       }
 

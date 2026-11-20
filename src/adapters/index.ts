@@ -1,7 +1,9 @@
 export {
   createGrokModelAdapter,
+  DEFAULT_GROK_MAX_COMPLETION_TOKENS,
   DEFAULT_GROK_MODEL,
   DEFAULT_XAI_CHAT_COMPLETIONS_URL,
+  GROK_SYSTEM_PROMPT,
   type GrokAdapterConfig,
 } from "./grok";
 export {

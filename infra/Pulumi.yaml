@@ -1,3 +1,8 @@
 name: bot-board
-runtime: bun
+runtime:
+  name: nodejs
+  options:
+    packagemanager: bun
+    typescript: false
+main: ../dist/infra/index.mjs
 description: bot-board Cloudflare Workers, D1, Queues, Cron, Rate Limiting, and Routing infrastructure

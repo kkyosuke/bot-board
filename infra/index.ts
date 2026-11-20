@@ -7,6 +7,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 const config = new pulumi.Config("bot-board");
 const stack = pulumi.getStack();
+const isProd = stack === "prod";
 
 const accountId = config.require("accountId");
 const appEnv = config.get("appEnv") ?? stack;
@@ -17,20 +18,71 @@ const ownerGithubId = config.require("ownerGithubId");
 const betterAuthSecret = config.requireSecret("betterAuthSecret");
 const githubClientId = config.requireSecret("githubClientId");
 const githubClientSecret = config.requireSecret("githubClientSecret");
-const xaiApiKey = config.getSecret("xaiApiKey");
+const xaiApiKey = isProd ? config.requireSecret("xaiApiKey") : config.getSecret("xaiApiKey");
+const xaiModel = config.get("xaiModel");
+const xaiApiUrl = config.get("xaiApiUrl");
 
 const rateLimitRequests = config.getNumber("rateLimitRequests") ?? 120;
 const rateLimitPeriodSeconds = config.getNumber("rateLimitPeriodSeconds") ?? 60;
 const rateLimitNamespaceId = config.require("rateLimitNamespaceId");
-const workerCpuMsLimit = config.getNumber("workerCpuMsLimit") ?? 50;
+const workerCpuMsLimit = config.getNumber("workerCpuMsLimit") ?? 10_000;
+const enableWorkersDev = config.getBoolean("enableWorkersDev") ?? !isProd;
 
 const zoneId = config.get("zoneId");
 const hostname = config.get("hostname");
 const routePattern = config.get("routePattern");
 
+// Validate critical production configuration before planning/applying Cloudflare resources
+if (rateLimitPeriodSeconds !== 10 && rateLimitPeriodSeconds !== 60) {
+  throw new Error(
+    `Invalid bot-board:rateLimitPeriodSeconds (${rateLimitPeriodSeconds}): Cloudflare Rate Limiting only supports 10 or 60 seconds.`,
+  );
+}
+if (!Number.isInteger(workerCpuMsLimit) || workerCpuMsLimit < 5000 || workerCpuMsLimit > 300_000) {
+  throw new Error(
+    `Invalid bot-board:workerCpuMsLimit (${workerCpuMsLimit}): must be an integer between 5000 and 300000 ms.`,
+  );
+}
+if ((stack === "staging" || isProd) && !betterAuthUrl.startsWith("https://")) {
+  throw new Error(
+    `Invalid bot-board:betterAuthUrl ("${betterAuthUrl}"): staging and prod stacks require an https:// URL.`,
+  );
+}
+if ((hostname !== undefined || routePattern !== undefined) && zoneId === undefined) {
+  throw new Error(
+    "bot-board:zoneId is required whenever bot-board:hostname or bot-board:routePattern is set.",
+  );
+}
+if (hostname !== undefined) {
+  const authHost = new URL(betterAuthUrl).hostname;
+  if (authHost !== hostname) {
+    throw new Error(
+      `bot-board:hostname ("${hostname}") must match bot-board:betterAuthUrl host ("${authHost}").`,
+    );
+  }
+}
+if (isProd && (zoneId === undefined || (hostname === undefined && routePattern === undefined))) {
+  throw new Error(
+    "Production stack requires bot-board:zoneId plus either bot-board:hostname or bot-board:routePattern.",
+  );
+}
+
+function resolveRepoRoot(): string {
+  const oneUp = resolve(import.meta.dirname, "..");
+  if (existsSync(resolve(oneUp, "package.json"))) {
+    return oneUp;
+  }
+  const twoUp = resolve(import.meta.dirname, "..", "..");
+  if (existsSync(resolve(twoUp, "package.json"))) {
+    return twoUp;
+  }
+  throw new Error(`Could not locate repository root from ${import.meta.dirname}.`);
+}
+
+const repoRoot = resolveRepoRoot();
 const namePrefix = `bot-board-${stack}`;
-const workerBundlePath = resolve(import.meta.dir, "..", "dist", "worker", "index.js");
-const clientAssetsDir = resolve(import.meta.dir, "..", "dist", "client");
+const workerBundlePath = resolve(repoRoot, "dist", "worker", "index.js");
+const clientAssetsDir = resolve(repoRoot, "dist", "client");
 
 function computeWorkerSha256(filePath: string): string {
   if (!existsSync(filePath)) {
@@ -52,12 +104,33 @@ function assertClientAssetsExist(assetsDir: string): string {
   return assetsDir;
 }
 
-// 1. Cloudflare D1 Database (Better Auth + Domain Tables)
-const database = new cloudflare.D1Database("bot-board-db", {
-  accountId,
-  name: `${namePrefix}-db`,
-  primaryLocationHint: "apac",
-});
+const STATIC_ASSETS_HEADERS = [
+  "/*",
+  "  X-Content-Type-Options: nosniff",
+  "  X-Frame-Options: DENY",
+  "  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+  "  Referrer-Policy: same-origin",
+  "  Strict-Transport-Security: max-age=31536000; includeSubDomains",
+  "/consent",
+  "  Referrer-Policy: no-referrer",
+  "  Cache-Control: no-store",
+  "/sign-in",
+  "  Referrer-Policy: no-referrer",
+  "  Cache-Control: no-store",
+].join("\n");
+
+// 1. Cloudflare D1 Database (Better Auth + Domain Tables; protected against accidental drop on prod)
+const database = new cloudflare.D1Database(
+  "bot-board-db",
+  {
+    accountId,
+    name: `${namePrefix}-db`,
+    primaryLocationHint: "apac",
+  },
+  {
+    protect: isProd,
+  },
+);
 
 // 2. Cloudflare Queues (decision-finalize / bot-work / bot-work-dlq)
 const decisionFinalizeQueue = new cloudflare.Queue("decision-finalize-queue", {
@@ -87,7 +160,7 @@ const workerBindings: pulumi.Input<cloudflare.types.input.WorkersScriptBinding>[
   {
     type: "d1",
     name: "DB",
-    id: database.id,
+    id: database.uuid,
   },
   {
     type: "queue",
@@ -112,6 +185,11 @@ const workerBindings: pulumi.Input<cloudflare.types.input.WorkersScriptBinding>[
       limit: rateLimitRequests,
       period: rateLimitPeriodSeconds,
     },
+  },
+  {
+    type: "plain_text",
+    name: "RATE_LIMIT_PERIOD_SECONDS",
+    text: String(rateLimitPeriodSeconds),
   },
   {
     type: "plain_text",
@@ -157,8 +235,22 @@ if (xaiApiKey !== undefined) {
     text: xaiApiKey,
   });
 }
+if (xaiModel !== undefined && xaiModel.trim() !== "") {
+  workerBindings.push({
+    type: "plain_text",
+    name: "XAI_MODEL",
+    text: xaiModel.trim(),
+  });
+}
+if (xaiApiUrl !== undefined && xaiApiUrl.trim() !== "") {
+  workerBindings.push({
+    type: "plain_text",
+    name: "XAI_API_URL",
+    text: xaiApiUrl.trim(),
+  });
+}
 
-// 4. Cloudflare Worker (Static Assets SPA + Hono API + MCP + Queue/Cron)
+// 4. Cloudflare Worker (Static Assets SPA + Hono API + MCP + Queue/Cron + Observability)
 const workerScript = new cloudflare.WorkersScript("bot-board-worker", {
   accountId,
   scriptName: namePrefix,
@@ -170,9 +262,13 @@ const workerScript = new cloudflare.WorkersScript("bot-board-worker", {
   limits: {
     cpuMs: workerCpuMsLimit,
   },
+  observability: {
+    enabled: true,
+  },
   assets: {
     directory: assertClientAssetsExist(clientAssetsDir),
     config: {
+      headers: STATIC_ASSETS_HEADERS,
       notFoundHandling: "single-page-application",
       runWorkerFirst: ["/api/*", "/.well-known/*"],
     },
@@ -180,7 +276,7 @@ const workerScript = new cloudflare.WorkersScript("bot-board-worker", {
   bindings: workerBindings,
 });
 
-// 5. Cloudflare Queue Consumers (isolated batchSize / maxRetries / DLQ)
+// 5. Cloudflare Queue Consumers (isolated batchSize / maxConcurrency / maxRetries / DLQ)
 const decisionFinalizeConsumer = new cloudflare.QueueConsumer("decision-finalize-consumer", {
   accountId,
   queueId: decisionFinalizeQueue.queueId,
@@ -202,6 +298,7 @@ const botWorkConsumer = new cloudflare.QueueConsumer("bot-work-consumer", {
   deadLetterQueue: botWorkDlq.queueName,
   settings: {
     batchSize: 1,
+    maxConcurrency: 5,
     maxRetries: 3,
     maxWaitTimeMs: 1000,
     retryDelay: 15,
@@ -215,8 +312,9 @@ const botWorkDlqConsumer = new cloudflare.QueueConsumer("bot-work-dlq-consumer",
   scriptName: workerScript.scriptName,
   settings: {
     batchSize: 5,
-    maxRetries: 1,
+    maxRetries: 5,
     maxWaitTimeMs: 1000,
+    retryDelay: 10,
   },
 });
 
@@ -227,7 +325,15 @@ const cronTrigger = new cloudflare.WorkersCronTrigger("bot-board-cron", {
   schedules: [{ cron: "* * * * *" }],
 });
 
-// 7. Optional Custom Domain or Route (HTTPS public entrypoint for MCP & OAuth)
+// 7. Workers.dev Subdomain control (staging preview convenience; disabled by default on prod)
+const scriptSubdomain = new cloudflare.WorkersScriptSubdomain("bot-board-subdomain", {
+  accountId,
+  scriptName: workerScript.scriptName,
+  enabled: enableWorkersDev,
+  previewsEnabled: false,
+});
+
+// 8. Optional Custom Domain or Route (HTTPS public entrypoint for MCP & OAuth)
 const customDomain =
   zoneId !== undefined && hostname !== undefined
     ? new cloudflare.WorkersCustomDomain("bot-board-domain", {
@@ -249,8 +355,10 @@ const workersRoute =
     : undefined;
 
 export const d1DatabaseId = database.id;
+export const d1DatabaseUuid = database.uuid;
 export const d1DatabaseName = database.name;
 export const workerName = workerScript.scriptName;
+export const publicUrl = hostname !== undefined ? `https://${hostname}` : betterAuthUrl;
 export const decisionFinalizeQueueId = decisionFinalizeQueue.queueId;
 export const botWorkQueueId = botWorkQueue.queueId;
 export const botWorkDlqId = botWorkDlq.queueId;
@@ -258,5 +366,6 @@ export const decisionFinalizeConsumerId = decisionFinalizeConsumer.consumerId;
 export const botWorkConsumerId = botWorkConsumer.consumerId;
 export const botWorkDlqConsumerId = botWorkDlqConsumer.consumerId;
 export const cronTriggerId = cronTrigger.id;
+export const subdomainEnabled = scriptSubdomain.enabled;
 export const customDomainId = customDomain?.id;
 export const routeId = workersRoute?.id;

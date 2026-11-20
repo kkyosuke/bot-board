@@ -608,6 +608,9 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
     baseURL: normalizedBaseUrl,
     secret: config.secret,
     trustedOrigins,
+    telemetry: {
+      enabled: false,
+    },
     onAPIError: {
       errorURL: "/sign-in",
     },

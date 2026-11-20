@@ -74,6 +74,7 @@ export interface WorkerRuntimeEnv {
   readonly BOT_WORK_QUEUE: BotWorkQueueProducer;
   readonly BOT_WORK_DLQ: BotWorkQueueProducer;
   readonly API_RATE_LIMITER?: RateLimit;
+  readonly RATE_LIMIT_PERIOD_SECONDS?: string;
   readonly ASSETS?: WorkerAssetsFetcher;
   readonly BETTER_AUTH_SECRET?: string;
   readonly BETTER_AUTH_URL?: string;
@@ -425,9 +426,12 @@ const workerHandler = {
   ): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/.well-known/")) {
+      const parsedPeriod = Number(env.RATE_LIMIT_PERIOD_SECONDS);
+      const retryAfterSeconds =
+        Number.isInteger(parsedPeriod) && parsedPeriod > 0 ? parsedPeriod : 60;
       const rateLimiter =
         env.API_RATE_LIMITER !== undefined
-          ? createCloudflareRateLimiter(env.API_RATE_LIMITER)
+          ? createCloudflareRateLimiter(env.API_RATE_LIMITER, retryAfterSeconds)
           : undefined;
       return await handleWorkerHttpRequest(request, {
         db: env.DB,
@@ -446,7 +450,7 @@ const workerHandler = {
                   ...(env.OWNER_GITHUB_ID !== undefined
                     ? { ownerGithubId: env.OWNER_GITHUB_ID }
                     : {}),
-                  enableMcpOAuth: true,
+                  enableMcpOAuth: false,
                 })
               : undefined;
           return createMcpBotServicePort(db, {

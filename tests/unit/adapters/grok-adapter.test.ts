@@ -422,4 +422,140 @@ describe("Model Adapter common contract & xAI Grok adapter (S7)", () => {
       ).rejects.toMatchObject({ kind: "permanent", reasonCode: "SCHEMA_INVALID" });
     }
   });
+
+  test("strips markdown json fences, accounts for reasoning_tokens, sets max_completion_tokens/reasoning_effort, handles null content, documents full strict schema in prompt, and sanitizes Zod issue paths (B4)", async () => {
+    const secretKey = "xai-b4-secret-never-leak";
+    let sentBody = "";
+
+    const fencedAdapter = createGrokModelAdapter({
+      apiKey: secretKey,
+      fetchImpl: createStubFetch((_input, init) => {
+        sentBody = typeof init?.body === "string" ? init.body : "";
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content:
+                      '```json\n{"action":"update_task","status":"ready","estimated_cost_cents":0}\n```',
+                  },
+                },
+              ],
+              usage: {
+                prompt_tokens: 1_000,
+                completion_tokens: 500,
+                completion_tokens_details: {
+                  reasoning_tokens: 24_000,
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }),
+    });
+
+    const out = await fencedAdapter.executeStep(SAMPLE_CONTEXT, {
+      timeoutMs: 5_000,
+      leaseRemainingMs: 60_000,
+    });
+    expect(out.action).toBe("update_task");
+    // 1000 + 500 + 24000 = 25500 tokens -> ceil(25500 / 10000) = 3 cents
+    expect(out.estimated_cost_cents).toBe(3);
+
+    const reqObj: unknown = JSON.parse(sentBody);
+    expect(reqObj).toMatchObject({
+      model: "grok-3-mini",
+      max_completion_tokens: 2048,
+      reasoning_effort: "low",
+    });
+
+    // Prompt must document all required strict keys, exact domain enums, and contain zero {...} / [...] / invalid "stop"
+    expect(sentBody).not.toContain("{...}");
+    expect(sentBody).not.toContain("[...]");
+    expect(sentBody).not.toContain('"stop"');
+    expect(sentBody).toContain('\\"on_decline_policy\\":\\"revise\\"|\\"block\\"');
+    expect(sentBody).toContain('\\"card_type\\":\\"policy\\"|\\"choice\\"|\\"deliverable\\"');
+    expect(sentBody).toContain('\\"selection_mode\\":\\"binary\\"|\\"single\\"|\\"multi\\"');
+    for (const requiredKey of [
+      "card_type",
+      "selection_mode",
+      "on_accept_effect",
+      "on_decline_effect",
+      "on_decline_policy",
+      "content_or_url",
+      "estimated_cost_cents",
+      "options",
+      "factors",
+      "subtasks",
+      "expected_version",
+    ]) {
+      expect(sentBody).toContain(requiredKey);
+    }
+
+    // Null content returns clean SCHEMA_INVALID error
+    const nullContentAdapter = createGrokModelAdapter({
+      apiKey: secretKey,
+      fetchImpl: createStubFetch(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: null } }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      ),
+    });
+    await expect(
+      nullContentAdapter.executeStep(SAMPLE_CONTEXT, {
+        timeoutMs: 5_000,
+        leaseRemainingMs: 60_000,
+      }),
+    ).rejects.toMatchObject({
+      kind: "permanent",
+      reasonCode: "SCHEMA_INVALID",
+    });
+
+    // Schema violation includes sanitized Zod field path without leaking raw model values or secretKey
+    const badFieldAdapter = createGrokModelAdapter({
+      apiKey: secretKey,
+      fetchImpl: createStubFetch(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      action: "update_task",
+                      status: "ready",
+                      unknown_field: `secret-${secretKey}`,
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      ),
+    });
+    let schemaErr: unknown = null;
+    try {
+      await badFieldAdapter.executeStep(SAMPLE_CONTEXT, {
+        timeoutMs: 5_000,
+        leaseRemainingMs: 60_000,
+      });
+    } catch (e) {
+      schemaErr = e;
+    }
+    expect(schemaErr).toBeInstanceOf(ModelAdapterError);
+    if (schemaErr instanceof ModelAdapterError) {
+      expect(schemaErr.reasonCode).toBe("SCHEMA_INVALID");
+      expect(schemaErr.message).toContain("unrecognized_keys");
+      expect(schemaErr.message).not.toContain(secretKey);
+    }
+  });
 });
