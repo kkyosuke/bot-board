@@ -62,6 +62,25 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
     for (const line of publicHeadersLines) {
       expect(infraIndex).toContain(JSON.stringify(line));
     }
+
+    // Verify deploy env vars & secrets stay in 1:1 parity across infra/deploy.ts, deploy.yml, and docs/deploy-and-plugins.md
+    const deployTs = readFileSync(join(REPO_ROOT, "infra", "deploy.ts"), "utf8");
+    const deployYml = readFileSync(join(REPO_ROOT, ".github", "workflows", "deploy.yml"), "utf8");
+    const runbookMd = readFileSync(join(REPO_ROOT, "docs", "deploy-and-plugins.md"), "utf8");
+
+    for (const envVar of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "SMOKE_BOT_TOKEN"]) {
+      expect(deployTs).toContain(envVar);
+      expect(deployYml).toContain(`${envVar}:`);
+      expect(runbookMd).toContain(envVar);
+    }
+    for (const pulumiSecret of [
+      "PULUMI_ACCESS_TOKEN",
+      "PULUMI_BACKEND_URL",
+      "PULUMI_CONFIG_PASSPHRASE",
+    ]) {
+      expect(deployYml).toContain(`${pulumiSecret}:`);
+      expect(runbookMd).toContain(pulumiSecret);
+    }
   });
 
   test("Pulumi stack configs isolate rateLimitNamespaceId, enforce safe workerCpuMsLimit (5000..300000ms), and contain zero inline plaintext secrets (B2, M2)", () => {

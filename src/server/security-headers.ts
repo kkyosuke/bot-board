@@ -29,7 +29,12 @@ function isSensitiveNoStoreApiPath(pathname: string, method: string): boolean {
 
 function isSensitiveNoStoreSpaPath(pathname: string): boolean {
   const normalized = pathname.replace(/\/+$/, "") || "/";
-  return normalized === "/consent" || normalized === "/sign-in";
+  return (
+    normalized === "/consent" ||
+    normalized.startsWith("/consent/") ||
+    normalized === "/sign-in" ||
+    normalized.startsWith("/sign-in/")
+  );
 }
 
 function isHttpsRequest(request: Request): boolean {

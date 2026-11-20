@@ -5,8 +5,18 @@
   Referrer-Policy: same-origin
   Strict-Transport-Security: max-age=31536000; includeSubDomains
 /consent
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+  Cache-Control: no-store
+/consent/*
+  ! Referrer-Policy
   Referrer-Policy: no-referrer
   Cache-Control: no-store
 /sign-in
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+  Cache-Control: no-store
+/sign-in/*
+  ! Referrer-Policy
   Referrer-Policy: no-referrer
   Cache-Control: no-store
