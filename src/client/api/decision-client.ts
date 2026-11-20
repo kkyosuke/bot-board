@@ -29,6 +29,7 @@ export interface UndoCardReceipt {
   readonly status: "pending";
   readonly restoredCard: DecisionCardItem;
   readonly restoredSiblingCards: readonly DecisionCardItem[];
+  readonly refreshedSnapshot?: DecisionQueueSnapshot;
 }
 
 export interface DeferCardInput {
@@ -45,9 +46,49 @@ export interface DeferCardReceipt {
   readonly card: DecisionCardItem;
 }
 
+export interface ProvisionalCardSnapshot {
+  readonly card: DecisionCardItem;
+  readonly decisionId: string;
+  readonly decision: "accepted" | "declined";
+  readonly selectedOptionIds: readonly string[];
+  readonly provisionalUntil: number;
+}
+
 export interface DecisionQueueSnapshot {
   readonly pendingCards: readonly DecisionCardItem[];
   readonly deferredCards: readonly DecisionCardItem[];
+  readonly provisionalCards?: readonly ProvisionalCardSnapshot[];
+  readonly workspacePaused?: boolean;
+  readonly hasActiveBots?: boolean;
+  readonly runningTaskCount?: number;
+}
+
+export interface CardDetailSibling {
+  readonly cardId: string;
+  readonly proposalId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly version: number;
+}
+
+export interface CardDetailSnapshot {
+  readonly card: DecisionCardItem;
+  readonly status: string;
+  readonly provisionalResult: "accepted" | "declined" | null;
+  readonly provisionalUntil: number | null;
+  readonly expiresAt: number | null;
+  readonly targetTaskVersion: number;
+  readonly currentTaskVersion: number;
+  readonly artifactFull: {
+    readonly id: string;
+    readonly title: string;
+    readonly kind: string;
+    readonly summary: string;
+    readonly contentOrUrl: string;
+    readonly version: number;
+  } | null;
+  readonly siblings: readonly CardDetailSibling[];
+  readonly replacementCardId: string | null;
 }
 
 export class ClientTransportError extends Error {
@@ -60,8 +101,19 @@ export class ClientTransportError extends Error {
   }
 }
 
+export class ClientAuthError extends Error {
+  public readonly status: 401 | 403;
+
+  public constructor(status: 401 | 403, message: string) {
+    super(message);
+    this.name = "ClientAuthError";
+    this.status = status;
+  }
+}
+
 export interface DecisionCardClient {
   listCards(): Promise<DecisionQueueSnapshot>;
+  getCardDetail?(cardId: string): Promise<CardDetailSnapshot>;
   decideCard(input: DecideCardInput): Promise<ProvisionalDecisionReceipt>;
   undoCard(input: UndoCardInput): Promise<UndoCardReceipt>;
   deferCard(input: DeferCardInput): Promise<DeferCardReceipt>;

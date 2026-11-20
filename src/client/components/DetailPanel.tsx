@@ -2,6 +2,8 @@ import { type ReactElement } from "react";
 
 import { type DecisionCardItem } from "@/domain";
 
+import { type CardDetailSnapshot } from "../api/decision-client";
+
 export interface ActivityLogEntry {
   readonly id: string;
   readonly time: string;
@@ -13,10 +15,11 @@ export interface ActivityLogEntry {
 
 export interface DetailContentProps {
   readonly card: DecisionCardItem | null;
+  readonly detail?: CardDetailSnapshot | null;
 }
 
 export function CardDetailContent(props: DetailContentProps): ReactElement {
-  const { card } = props;
+  const { card, detail } = props;
 
   if (card === null) {
     return (
@@ -27,6 +30,12 @@ export function CardDetailContent(props: DetailContentProps): ReactElement {
   }
 
   const options = card.options ?? [];
+  const fullContent =
+    detail !== null && detail !== undefined && detail.card.id === card.id
+      ? (detail.artifactFull?.contentOrUrl ?? null)
+      : null;
+  const siblings =
+    detail !== null && detail !== undefined && detail.card.id === card.id ? detail.siblings : [];
 
   return (
     <div className="space-y-3">
@@ -46,16 +55,46 @@ export function CardDetailContent(props: DetailContentProps): ReactElement {
       >
         <div className="flex items-center justify-between gap-2 text-xs">
           <span className="font-semibold">{card.artifact.title}</span>
-          <span style={{ color: "var(--ink-muted)" }}>{card.artifact.kind}</span>
+          <span style={{ color: "var(--ink-muted)" }}>
+            {card.artifact.kind} v{card.artifact.version}
+          </span>
         </div>
-        <div className="font-mono text-xs leading-relaxed" style={{ color: "var(--ink-muted)" }}>
-          {card.artifact.excerpt.map((line, index) => (
-            <div key={`${index}-${line}`} className="py-0.5">
-              {line}
+        {fullContent !== null && fullContent.trim() !== "" ? (
+          <pre
+            data-testid="detail-artifact-full"
+            className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed"
+            style={{ color: "var(--ink-muted)" }}
+          >
+            {fullContent}
+          </pre>
+        ) : (
+          <div className="font-mono text-xs leading-relaxed" style={{ color: "var(--ink-muted)" }}>
+            {card.artifact.excerpt.map((line, index) => (
+              <div key={`${index}-${line}`} className="py-0.5">
+                {line}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {siblings.length > 0 ? (
+        <div className="space-y-1.5" data-testid="detail-siblings">
+          <div className="text-xs font-bold">同グループの他候補（排他比較）</div>
+          {siblings.map((sib) => (
+            <div
+              key={sib.cardId}
+              className="flex items-center justify-between gap-2 rounded-xl border px-2.5 py-2 text-xs"
+              style={{ borderColor: "var(--border-subtle)" }}
+            >
+              <span className="min-w-0 truncate font-semibold">{sib.title}</span>
+              <span className="shrink-0 font-mono" style={{ color: "var(--ink-muted)" }}>
+                {sib.status} v{sib.version}
+              </span>
             </div>
           ))}
         </div>
-      </div>
+      ) : null}
 
       {options.length > 0 ? (
         <div className="space-y-1.5">

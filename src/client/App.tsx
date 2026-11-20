@@ -26,7 +26,14 @@ import {
   type SwipeVisualState,
 } from "@/domain";
 
-import { ClientTransportError, type DecisionCardClient } from "./api/decision-client";
+import {
+  type CardDetailSnapshot,
+  ClientAuthError,
+  ClientTransportError,
+  type DecisionCardClient,
+  type DecisionQueueSnapshot,
+} from "./api/decision-client";
+import { createHttpDecisionClient } from "./api/http-decision-client";
 import { createMockDecisionClient } from "./api/mock-decision-client";
 import { ActionBar } from "./components/ActionBar";
 import { BoardStateCard } from "./components/BoardStateCard";
@@ -39,9 +46,12 @@ import {
 } from "./components/DetailPanel";
 import { SheetModal } from "./components/SheetModal";
 import { type ProvisionalToastEntry, UndoBanner } from "./components/UndoBanner";
+import { BoardPage } from "./pages/BoardPage";
 import { ConsentPage } from "./pages/ConsentPage";
+import { HistoryPage } from "./pages/HistoryPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { SignInPage } from "./pages/SignInPage";
-import { type AppRoute, useSpaRouter } from "./router";
+import { buildSignInRedirectPath, useSpaRouter } from "./router";
 
 export interface AppProps {
   readonly client?: DecisionCardClient;
@@ -49,6 +59,7 @@ export interface AppProps {
 }
 
 interface DecisionBoardPageProps extends AppProps {
+  readonly search: string;
   readonly onNavigate: (to: string, options?: { readonly replace?: boolean }) => void;
 }
 
@@ -73,11 +84,13 @@ function formatClockNow(): string {
   return new Date().toTimeString().slice(0, 8);
 }
 
-function readInitialStateFromUrl(): BoardViewState {
-  if (typeof window === "undefined") {
-    return "normal";
-  }
-  const param = new URLSearchParams(window.location.search).get("state");
+function readUseMockMode(search: string): boolean {
+  const params = new URLSearchParams(search);
+  return params.get("mode") === "mock";
+}
+
+function readInitialStateFromUrl(search: string): BoardViewState {
+  const param = new URLSearchParams(search).get("state");
   return isBoardViewState(param) ? param : "normal";
 }
 
@@ -119,18 +132,24 @@ function formatDecisionLabel(
 }
 
 function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
-  const { onNavigate } = props;
+  const { search, onNavigate } = props;
+  const isMockMode = props.client === undefined && readUseMockMode(search);
   const clientRef = useRef<DecisionCardClient | null>(null);
   if (clientRef.current === null) {
-    clientRef.current = props.client ?? createMockDecisionClient();
+    clientRef.current =
+      props.client ?? (isMockMode ? createMockDecisionClient() : createHttpDecisionClient());
   }
   const client = clientRef.current;
 
   const [viewState, setViewState] = useState<BoardViewState>(
-    () => props.initialViewState ?? readInitialStateFromUrl(),
+    () => props.initialViewState ?? readInitialStateFromUrl(search),
   );
   const [pendingCards, setPendingCards] = useState<readonly DecisionCardItem[]>([]);
   const [deferredCards, setDeferredCards] = useState<readonly DecisionCardItem[]>([]);
+  const [workspacePaused, setWorkspacePaused] = useState<boolean>(false);
+  const [hasActiveBots, setHasActiveBots] = useState<boolean | null>(null);
+  const [runningTaskCount, setRunningTaskCount] = useState<number>(0);
+  const [topCardDetail, setTopCardDetail] = useState<CardDetailSnapshot | null>(null);
   const [hasLoaded, setHasLoaded] = useState<boolean>(false);
   const [totalInitialCount, setTotalInitialCount] = useState<number>(6);
   const [clearedCount, setClearedCount] = useState<number>(0);
@@ -145,6 +164,7 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [activityLogs, setActivityLogs] = useState<readonly ActivityLogEntry[]>([]);
   const [hintText, setHintText] = useState<string>("右へスワイプで採用・左で見送り");
+  const [loadErrorMessage, setLoadErrorMessage] = useState<string | null>(null);
 
   const [swipeVisual, setSwipeVisual] = useState<SwipeVisualState | null>(null);
   const [flyDirection, setFlyDirection] = useState<"right" | "left" | "down" | null>(null);
@@ -224,12 +244,86 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
     });
   }, []);
 
+  const handleAuthRedirect = useCallback(
+    (err: unknown): boolean => {
+      if (!(err instanceof ClientAuthError)) {
+        return false;
+      }
+      onNavigate(
+        err.status === 401
+          ? buildSignInRedirectPath(`/${search}`)
+          : "/sign-in?error=NOT_AUTHORIZED",
+        { replace: true },
+      );
+      return true;
+    },
+    [onNavigate, search],
+  );
+
+  const applyQueueSnapshot = useCallback(
+    (
+      snapshot: DecisionQueueSnapshot,
+      options?: { readonly restoreProvisional?: boolean; readonly focusCardId?: string },
+    ): void => {
+      let orderedPending = [...snapshot.pendingCards];
+      if (options?.focusCardId !== undefined) {
+        const focusIdx = orderedPending.findIndex((c) => c.id === options.focusCardId);
+        if (focusIdx > 0) {
+          const [focused] = orderedPending.splice(focusIdx, 1);
+          if (focused !== undefined) {
+            orderedPending = [focused, ...orderedPending];
+          }
+        }
+      }
+      setPendingCards(orderedPending);
+      setDeferredCards(snapshot.deferredCards);
+      if (snapshot.workspacePaused !== undefined) {
+        setWorkspacePaused(snapshot.workspacePaused);
+      }
+      if (snapshot.hasActiveBots !== undefined) {
+        setHasActiveBots(snapshot.hasActiveBots);
+      }
+      if (snapshot.runningTaskCount !== undefined) {
+        setRunningTaskCount(snapshot.runningTaskCount);
+      }
+      if (options?.restoreProvisional === true && snapshot.provisionalCards !== undefined) {
+        const now = Date.now();
+        const restored: StoredProvisionalState[] = [...snapshot.provisionalCards]
+          .filter((item) => item.provisionalUntil > now)
+          .sort((a, b) => a.provisionalUntil - b.provisionalUntil)
+          .map((item) => ({
+            cardId: item.card.id,
+            headline: item.card.headline,
+            label: formatDecisionLabel(
+              item.card,
+              item.decision,
+              item.card.selectionMode === "single" ? item.selectedOptionIds[0] : undefined,
+              item.selectedOptionIds.length,
+            ),
+            isDecline: item.decision === "declined",
+            expectedVersion: item.card.version,
+            provisionalUntil: item.provisionalUntil,
+            selectedOptionId:
+              item.card.selectionMode === "single" ? item.selectedOptionIds[0] : undefined,
+            checkedOptionIds:
+              item.card.selectionMode === "multi" ? item.selectedOptionIds : undefined,
+          }));
+        provisionalQueueRef.current = restored;
+        setProvisionalQueue(restored);
+        setNowMs(now);
+      }
+      setLoadErrorMessage(null);
+      hydrateSelectionDefaults(orderedPending);
+    },
+    [hydrateSelectionDefaults],
+  );
+
   // Sync offline simulation mode with viewState without wiping queue progress
   useEffect(() => {
     client.setOfflineMode?.(viewState === "offline_error");
   }, [client, viewState]);
 
-  // Load initial queue snapshot with error recovery
+  // Load initial queue snapshot with error recovery & reload provisional restoration
   useEffect(() => {
     let active = true;
 
@@ -239,20 +333,22 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
         if (!active) {
           return;
         }
-        setPendingCards(snapshot.pendingCards);
-        setDeferredCards(snapshot.deferredCards);
+        applyQueueSnapshot(snapshot, { restoreProvisional: true });
         if (!initializedTotalRef.current) {
           initializedTotalRef.current = true;
           setTotalInitialCount(
             Math.max(1, snapshot.pendingCards.length + snapshot.deferredCards.length),
           );
         }
-        hydrateSelectionDefaults(snapshot.pendingCards);
       } catch (err) {
         if (!active) {
           return;
         }
+        if (handleAuthRedirect(err)) {
+          return;
+        }
         const message = formatClientError(err, "カードの読み込みに失敗しました。");
+        setLoadErrorMessage(message);
         setHintText(message);
         appendLog("error", "初期読み込み失敗", message);
       } finally {
@@ -266,7 +362,7 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
     return () => {
       active = false;
     };
-  }, [client, hydrateSelectionDefaults, appendLog]);
+  }, [client, applyQueueSnapshot, handleAuthRedirect, appendLog]);
 
   // Tick 5-second undo countdown & finalize expired provisional entries outside state updaters (StrictMode-safe)
   useEffect(() => {
@@ -287,15 +383,51 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
       for (const item of expired) {
         appendLog("finalized", `確定完了→Bot送信: ${item.headline}`, item.label);
       }
+      // In live HTTP mode, refresh listCards() after expiry to trigger on-demand finalization fallback
+      if (!isMockMode && client.getCardDetail !== undefined) {
+        void client
+          .listCards()
+          .then((snap) => {
+            applyQueueSnapshot(snap);
+          })
+          .catch(() => {
+            // Non-fatal background sync error
+          });
+      }
     }, 100);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [provisionalQueue.length, appendLog]);
+  }, [provisionalQueue.length, appendLog, isMockMode, client, applyQueueSnapshot]);
 
   const isInteractiveMode = viewState === "normal" || viewState === "offline_error";
   const topCard = isInteractiveMode ? (pendingCards[0] ?? null) : null;
+
+  // Fetch full artifact content & siblings for top card in live HTTP mode
+  useEffect(() => {
+    if (topCard === null || client.getCardDetail === undefined) {
+      setTopCardDetail(null);
+      return;
+    }
+    let active = true;
+    const cardId = topCard.id;
+    void client
+      .getCardDetail(cardId)
+      .then((detail) => {
+        if (active) {
+          setTopCardDetail(detail);
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          handleAuthRedirect(err);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [client, topCard, handleAuthRedirect]);
 
   const topSelectedOptionId =
     topCard !== null
@@ -329,6 +461,27 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
       return { ...prev, [card.id]: next };
     });
   }, []);
+
+  const refreshAfterConflictIfNeeded = useCallback(
+    async (err: unknown): Promise<void> => {
+      if (
+        !(err instanceof DomainError) ||
+        (err.code !== "VERSION_CONFLICT" &&
+          err.code !== "GROUP_LOCKED" &&
+          err.code !== "INVALID_TRANSITION" &&
+          err.code !== "NOT_FOUND")
+      ) {
+        return;
+      }
+      try {
+        const refreshed = await client.listCards();
+        applyQueueSnapshot(refreshed, { restoreProvisional: true });
+      } catch (refreshErr) {
+        handleAuthRedirect(refreshErr);
+      }
+    },
+    [client, applyQueueSnapshot, handleAuthRedirect],
+  );
 
   const commitTopCardDecision = useCallback(
     async (decision: "accepted" | "declined"): Promise<void> => {
@@ -391,10 +544,11 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
         let refreshErrorMessage: string | null = null;
         try {
           const snapshot = await client.listCards();
-          setPendingCards(snapshot.pendingCards);
-          setDeferredCards(snapshot.deferredCards);
-          hydrateSelectionDefaults(snapshot.pendingCards);
+          applyQueueSnapshot(snapshot);
         } catch (refreshErr) {
+          if (handleAuthRedirect(refreshErr)) {
+            return;
+          }
           const closedIds = new Set([topCard.id, ...receipt.closedSiblingCardIds]);
           setPendingCards((prev) => prev.filter((item) => !closedIds.has(item.id)));
           setDeferredCards((prev) => prev.filter((item) => !closedIds.has(item.id)));
@@ -434,6 +588,35 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
           JSON.stringify(payload),
         );
       } catch (err) {
+        if (handleAuthRedirect(err)) {
+          return;
+        }
+        if (err instanceof DomainError && err.code === "STALE_PROPOSAL") {
+          const replacementIdRaw = err.details?.replacementCardId;
+          const replacementCardId =
+            replacementIdRaw !== undefined && replacementIdRaw.trim() !== ""
+              ? replacementIdRaw
+              : undefined;
+          try {
+            const refreshed = await client.listCards();
+            applyQueueSnapshot(refreshed, {
+              restoreProvisional: true,
+              ...(replacementCardId !== undefined ? { focusCardId: replacementCardId } : {}),
+            });
+          } catch (refreshErr) {
+            if (handleAuthRedirect(refreshErr)) {
+              return;
+            }
+          }
+          const staleMsg =
+            replacementCardId !== undefined
+              ? "対象タスクまたは成果が更新されたため、再確認カードへ切り替えました。"
+              : err.message;
+          setHintText(staleMsg);
+          appendLog("error", `再確認カード切替 (STALE_PROPOSAL): ${topCard.headline}`, staleMsg);
+          return;
+        }
+        await refreshAfterConflictIfNeeded(err);
         const message = formatClientError(
           err,
           "保存に失敗しました。カードは判断待ちへ戻しています。",
@@ -455,7 +638,9 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
       releaseBusy,
       client,
       nextRequestId,
-      hydrateSelectionDefaults,
+      applyQueueSnapshot,
+      handleAuthRedirect,
+      refreshAfterConflictIfNeeded,
       appendLog,
     ],
   );
@@ -480,11 +665,14 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
       });
 
       const snapshot = await client.listCards();
-      setPendingCards(snapshot.pendingCards);
-      setDeferredCards(snapshot.deferredCards);
+      applyQueueSnapshot(snapshot);
       setHintText("「あとで」へ回しました（未決定のまま保留）");
       appendLog("defer", `保留（あとで）: ${topCard.headline}`, "右上の「あとで」から復帰できます");
     } catch (err) {
+      if (handleAuthRedirect(err)) {
+        return;
+      }
+      await refreshAfterConflictIfNeeded(err);
       const message = formatClientError(err, "保留に失敗しました。");
       setHintText(message);
       appendLog("error", `保留失敗: ${topCard.headline}`, message);
@@ -493,7 +681,17 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
       setSwipeVisual(null);
       releaseBusy();
     }
-  }, [topCard, acquireBusy, releaseBusy, client, nextRequestId, appendLog]);
+  }, [
+    topCard,
+    acquireBusy,
+    releaseBusy,
+    client,
+    nextRequestId,
+    applyQueueSnapshot,
+    handleAuthRedirect,
+    refreshAfterConflictIfNeeded,
+    appendLog,
+  ]);
 
   const restoreDeferredCard = useCallback(
     async (card: DecisionCardItem): Promise<void> => {
@@ -508,12 +706,14 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
           action: "restore",
         });
         const snapshot = await client.listCards();
-        setPendingCards(snapshot.pendingCards);
-        setDeferredCards(snapshot.deferredCards);
-        hydrateSelectionDefaults(snapshot.pendingCards);
+        applyQueueSnapshot(snapshot, { focusCardId: card.id });
         setOpenSheet(null);
         setHintText("保留カードを判断キュー先頭へ戻しました");
       } catch (err) {
+        if (handleAuthRedirect(err)) {
+          return;
+        }
+        await refreshAfterConflictIfNeeded(err);
         const message = formatClientError(err, "保留カードの復帰に失敗しました。");
         setHintText(message);
         appendLog("error", `復帰失敗: ${card.headline}`, message);
@@ -521,7 +721,16 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
         releaseBusy();
       }
     },
-    [acquireBusy, releaseBusy, client, nextRequestId, hydrateSelectionDefaults, appendLog],
+    [
+      acquireBusy,
+      releaseBusy,
+      client,
+      nextRequestId,
+      applyQueueSnapshot,
+      handleAuthRedirect,
+      refreshAfterConflictIfNeeded,
+      appendLog,
+    ],
   );
 
   const undoLatestProvisional = useCallback(async (): Promise<void> => {
@@ -538,9 +747,8 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
         requestId: nextRequestId("undo"),
       });
 
-      const snapshot = await client.listCards();
-      setPendingCards(snapshot.pendingCards);
-      setDeferredCards(snapshot.deferredCards);
+      const snapshot = receipt.refreshedSnapshot ?? (await client.listCards());
+      applyQueueSnapshot(snapshot, { focusCardId: receipt.cardId });
 
       if (latest.selectedOptionId !== undefined) {
         const preservedId = latest.selectedOptionId;
@@ -562,6 +770,9 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
         "Botへ渡す前に選択状態のまま判断待ちへ復帰",
       );
     } catch (err) {
+      if (handleAuthRedirect(err)) {
+        return;
+      }
       const keepForRetry = isRetryableClientError(err) && latest.provisionalUntil > Date.now();
       if (!keepForRetry) {
         const remaining = provisionalQueueRef.current.filter(
@@ -579,40 +790,55 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
     } finally {
       releaseBusy();
     }
-  }, [acquireBusy, releaseBusy, client, nextRequestId, appendLog]);
+  }, [
+    acquireBusy,
+    releaseBusy,
+    client,
+    nextRequestId,
+    applyQueueSnapshot,
+    handleAuthRedirect,
+    appendLog,
+  ]);
 
   const handleResetDemo = useCallback(async (): Promise<void> => {
     if (!acquireBusy()) {
       return;
     }
     try {
+      const isMockReset = client.resetDemoQueue !== undefined;
       const snapshot =
         client.resetDemoQueue !== undefined
           ? await client.resetDemoQueue()
           : await client.listCards();
       initializedTotalRef.current = true;
-      provisionalQueueRef.current = [];
       setViewState("normal");
-      setPendingCards(snapshot.pendingCards);
-      setDeferredCards(snapshot.deferredCards);
+      if (isMockReset) {
+        provisionalQueueRef.current = [];
+        setProvisionalQueue([]);
+        setClearedCount(0);
+        setActivityLogs([]);
+        setSelectedByCardId({});
+        setCheckedByCardId({});
+      }
+      applyQueueSnapshot(snapshot, { restoreProvisional: !isMockReset });
       setTotalInitialCount(
         Math.max(1, snapshot.pendingCards.length + snapshot.deferredCards.length),
       );
-      setClearedCount(0);
-      setProvisionalQueue([]);
-      setActivityLogs([]);
-      setSelectedByCardId({});
-      setCheckedByCardId({});
-      hydrateSelectionDefaults(snapshot.pendingCards);
-      setHintText("右へスワイプで採用・左で見送り");
+      setHintText(
+        isMockReset ? "右へスワイプで採用・左で見送り" : "最新の判断キューを再取得しました",
+      );
     } catch (err) {
+      if (handleAuthRedirect(err)) {
+        return;
+      }
       const message = formatClientError(err, "キューの再読み込みに失敗しました。");
+      setLoadErrorMessage(message);
       setHintText(message);
       appendLog("error", "再読み込み失敗", message);
     } finally {
       releaseBusy();
     }
-  }, [acquireBusy, releaseBusy, client, hydrateSelectionDefaults, appendLog]);
+  }, [acquireBusy, releaseBusy, client, applyQueueSnapshot, handleAuthRedirect, appendLog]);
 
   const handleRecoverOnline = useCallback((): void => {
     client.setOfflineMode?.(false);
@@ -917,7 +1143,11 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
       : !hasLoaded
         ? "loading"
         : pendingCards.length === 0
-          ? "empty"
+          ? hasActiveBots === false
+            ? "bot_disconnected"
+            : runningTaskCount > 0
+              ? "bot_running"
+              : "empty"
           : null;
 
   return (
@@ -976,29 +1206,81 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
           </div>
         </div>
 
-        <button
-          type="button"
-          data-testid="btn-open-deferred"
-          onClick={() => setOpenSheet("deferred")}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold"
-          style={{
-            backgroundColor: "var(--surface-card)",
-            borderColor: "var(--border-default)",
-          }}
-        >
-          <span>あとで</span>
-          <span
-            data-testid="deferred-count"
-            className="rounded-md px-1.5 py-0.5 tabular-nums"
+        <div className="flex shrink-0 items-center gap-1.5">
+          {!isMockMode ? (
+            <button
+              type="button"
+              data-testid="btn-live-refresh"
+              disabled={isBusy}
+              onClick={() => {
+                void handleResetDemo();
+              }}
+              aria-label="判断キューを最新化"
+              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-center rounded-xl border px-2.5 text-xs font-semibold disabled:opacity-45"
+              style={{
+                backgroundColor: "var(--surface-card)",
+                borderColor: "var(--border-default)",
+              }}
+            >
+              更新
+            </button>
+          ) : null}
+          <button
+            type="button"
+            data-testid="btn-open-deferred"
+            onClick={() => setOpenSheet("deferred")}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold"
             style={{
-              backgroundColor: "var(--surface-subtle)",
-              color: "var(--ink-muted)",
+              backgroundColor: "var(--surface-card)",
+              borderColor: "var(--border-default)",
             }}
           >
-            {deferredCards.length}
-          </span>
-        </button>
+            <span>あとで</span>
+            <span
+              data-testid="deferred-count"
+              className="rounded-md px-1.5 py-0.5 tabular-nums"
+              style={{
+                backgroundColor: "var(--surface-subtle)",
+                color: "var(--ink-muted)",
+              }}
+            >
+              {deferredCards.length}
+            </span>
+          </button>
+        </div>
       </header>
+
+      {workspacePaused ? (
+        <div
+          role="alert"
+          data-testid="decide-paused-banner"
+          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border p-3 text-xs"
+          style={{
+            borderColor: "var(--tone-decline-border)",
+            backgroundColor: "var(--tone-decline-bg)",
+          }}
+        >
+          <div className="min-w-0">
+            <div className="font-bold" style={{ color: "var(--tone-decline)" }}>
+              WORKSPACE_PAUSED: 緊急一時停止中
+            </div>
+            <div style={{ color: "var(--ink-muted)" }}>
+              全 Bot の新規書込・Queue ワーカー起動を停止中です。再開は設定画面から行えます。
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate("/settings")}
+            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl px-3 font-bold"
+            style={{
+              backgroundColor: "var(--accent-primary)",
+              color: "var(--accent-primary-ink)",
+            }}
+          >
+            設定で解除
+          </button>
+        </div>
+      ) : null}
 
       {/* Queue Quick-Jump Strip */}
       {isInteractiveMode && pendingCards.length > 0 ? (
@@ -1076,11 +1358,54 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
             data-testid="card-deck"
             className="relative flex min-h-[465px] w-full max-w-[445px] items-stretch justify-center select-none"
           >
-            {nonInteractiveState !== null ? (
+            {!isMockMode &&
+            loadErrorMessage !== null &&
+            pendingCards.length === 0 &&
+            hasLoaded &&
+            viewState === "normal" ? (
+              <div
+                role="alert"
+                data-testid="live-load-error"
+                className="bb-card-shadow flex w-full flex-col items-center justify-center gap-4 rounded-2xl border p-6 text-center"
+                style={{
+                  backgroundColor: "var(--surface-card)",
+                  borderColor: "var(--tone-warn-border)",
+                }}
+              >
+                <div className="space-y-1.5">
+                  <h2 className="text-base font-bold" style={{ color: "var(--tone-warn)" }}>
+                    判断カードの読み込みに失敗しました
+                  </h2>
+                  <p
+                    className="mx-auto max-w-xs text-xs leading-relaxed sm:text-sm"
+                    style={{ color: "var(--ink-muted)" }}
+                  >
+                    {loadErrorMessage}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="btn-live-load-retry"
+                  disabled={isBusy}
+                  onClick={() => {
+                    void handleResetDemo();
+                  }}
+                  className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl px-4 text-xs font-bold disabled:opacity-45"
+                  style={{
+                    backgroundColor: "var(--accent-primary)",
+                    color: "var(--accent-primary-ink)",
+                  }}
+                >
+                  再読み込み
+                </button>
+              </div>
+            ) : nonInteractiveState !== null ? (
               <BoardStateCard
                 viewState={nonInteractiveState}
                 clearedCount={clearedCount}
                 deferredCount={deferredCards.length}
+                isLiveMode={!isMockMode}
+                runningTaskCount={runningTaskCount}
                 onOpenDeferred={() => setOpenSheet("deferred")}
                 onResetDemo={() => void handleResetDemo()}
                 onOpenConnectHint={() => onNavigate("/settings")}
@@ -1193,7 +1518,7 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
             className="max-h-[560px] space-y-4 overflow-y-auto p-4 text-sm"
           >
             {inspectorTab === "detail" ? (
-              <CardDetailContent card={topCard} />
+              <CardDetailContent card={topCard} detail={topCardDetail} />
             ) : (
               <ActivityLogList logs={activityLogs} />
             )}
@@ -1203,14 +1528,14 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
 
       <BottomNav activeTab="decide" onSelectTab={handleSelectNav} />
 
-      {/* Bottom Sheet / Modal for Detail, Deferred List, and S6 Placeholder Notice */}
+      {/* Bottom Sheet / Modal for Detail and Deferred List */}
       <SheetModal
         open={openSheet === "detail"}
         title="カード詳細・成果プレビュー"
         testId="detail-sheet"
         onClose={handleCloseSheet}
       >
-        <CardDetailContent card={topCard} />
+        <CardDetailContent card={topCard} detail={topCardDetail} />
       </SheetModal>
 
       <SheetModal
@@ -1258,80 +1583,6 @@ function DecisionBoardPage(props: DecisionBoardPageProps): ReactElement {
   );
 }
 
-interface SecondaryRoutePlaceholderProps {
-  readonly route: Exclude<AppRoute, "/" | "/sign-in" | "/consent">;
-  readonly onNavigate: (to: string, options?: { readonly replace?: boolean }) => void;
-}
-
-function SecondaryRoutePlaceholder(props: SecondaryRoutePlaceholderProps): ReactElement {
-  const { route, onNavigate } = props;
-  const activeTab: NavTabId =
-    route === "/board" ? "board" : route === "/history" ? "history" : "settings";
-  const label =
-    route === "/board"
-      ? "状況（読み取り専用カンバン）"
-      : route === "/history"
-        ? "判断履歴"
-        : "ワークスペース・Bot接続設定";
-
-  const handleSelectNav = (tab: NavTabId): void => {
-    if (tab === "decide") {
-      onNavigate("/");
-      return;
-    }
-    onNavigate(`/${tab}`);
-  };
-
-  return (
-    <div
-      className="mx-auto flex min-h-dvh w-full max-w-[960px] flex-col justify-between px-3 py-4 sm:px-5 sm:py-6"
-      data-testid={`route-shell-${activeTab}`}
-    >
-      <section
-        className="space-y-3 rounded-2xl border p-5 bb-card-shadow"
-        style={{
-          borderColor: "var(--border-default)",
-          backgroundColor: "var(--surface-card)",
-        }}
-      >
-        <div className="text-xs font-semibold" style={{ color: "var(--ink-muted)" }}>
-          {route}
-        </div>
-        <h1 className="text-base font-bold">{label}</h1>
-        <p className="text-xs leading-relaxed" style={{ color: "var(--ink-muted)" }}>
-          共通 SPA ルーターに接続済みです。補助画面 UI の本実装は次スライス（S6）で追加されます。
-        </p>
-        <div className="flex flex-wrap gap-2 pt-1">
-          <button
-            type="button"
-            onClick={() => onNavigate("/")}
-            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl px-4 text-xs font-bold"
-            style={{
-              backgroundColor: "var(--accent-primary)",
-              color: "var(--accent-primary-ink)",
-            }}
-          >
-            判断画面へ戻る
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate("/sign-in")}
-            className="inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center rounded-xl border px-4 text-xs font-semibold"
-            style={{
-              borderColor: "var(--border-default)",
-              backgroundColor: "var(--surface-subtle)",
-              color: "var(--ink-primary)",
-            }}
-          >
-            オーナー認証（/sign-in）
-          </button>
-        </div>
-      </section>
-      <BottomNav activeTab={activeTab} onSelectTab={handleSelectNav} />
-    </div>
-  );
-}
-
 export function App(props: AppProps): ReactElement {
   const { location, navigate } = useSpaRouter();
 
@@ -1341,12 +1592,14 @@ export function App(props: AppProps): ReactElement {
   if (location.route === "/consent") {
     return <ConsentPage search={location.search} onNavigate={navigate} />;
   }
-  if (
-    location.route === "/board" ||
-    location.route === "/history" ||
-    location.route === "/settings"
-  ) {
-    return <SecondaryRoutePlaceholder route={location.route} onNavigate={navigate} />;
+  if (location.route === "/board") {
+    return <BoardPage onNavigate={navigate} />;
   }
-  return <DecisionBoardPage {...props} onNavigate={navigate} />;
+  if (location.route === "/history") {
+    return <HistoryPage onNavigate={navigate} />;
+  }
+  if (location.route === "/settings") {
+    return <SettingsPage onNavigate={navigate} />;
+  }
+  return <DecisionBoardPage {...props} search={location.search} onNavigate={navigate} />;
 }
