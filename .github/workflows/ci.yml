@@ -46,3 +46,5 @@ jobs:
         run: bunx playwright install --with-deps chromium
       - name: Run Playwright E2E suite
         run: bun run test:e2e
+      - name: Run Full-Stack Vertical MVP E2E suite (All 12 ACs)
+        run: bun run test:e2e:fullstack

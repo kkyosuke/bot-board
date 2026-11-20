@@ -9,6 +9,7 @@
     "check": "bun check",
     "check:guardrails": "bun run scripts/check-guardrails.ts",
     "dev": "vite",
+    "dev:full": "bun run build && bun run tests/e2e/support/fullstack-server.ts",
     "fmt": "bun fmt",
     "fmt:check": "bun fmt --check",
     "infra:preview": "bun run infra/preview.ts",
@@ -17,6 +18,7 @@
     "preview": "vite preview",
     "test": "bun test",
     "test:e2e": "bunx playwright test",
+    "test:e2e:fullstack": "bun run build && bunx playwright test --config playwright.fullstack.config.ts",
     "verify": "bun fmt --check && bun lint && bun check && bun run check:guardrails && bun test && bun run build && bun run build:worker && bun run infra:preview"
   },
   "dependencies": {

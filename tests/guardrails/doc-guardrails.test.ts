@@ -287,4 +287,114 @@ describe("documentation and guardrail ratchet checker", () => {
       report.errors.some((e) => e.includes('Slice S5 claims AC "DEC-04"') && e.includes("S5")),
     ).toBe(true);
   });
+
+  test("still blocks 対応済/検証済 when S8 is implemented but S4 is code-only (undeployed), blocks Muse 対応済 while unidentified, and blocks blanket claims (B1)", () => {
+    const undeployedS4Report = createMinimalDocsRepo((root) => {
+      writeFileSync(
+        join(root, "docs", "implementation-plan.md"),
+        [
+          "# Plan",
+          "",
+          "| Slice | Phase | スコープ | UI Artifact | 主な検証対象 | 状態 |",
+          "| --- | --- | --- | --- | --- | --- |",
+          "| **S0** | Phase 1 | Guardrails | 不要 | CI | **実装済** |",
+          "| **S1** | Phase 1 | DB | 不要 | test | **実装済** |",
+          "| **S2** | Phase 1 | Bot | 不要 | test | **実装済** |",
+          "| **S3** | Phase 1 | Human | 不要 | test | **実装済** |",
+          "| **S4** | Phase 1 | OAuth | 必須 | MCP | **コード実装済**（検証環境デプロイは認証情報設定後） |",
+          "| **S5** | Phase 2 | Card UI | 必須 | E2E | **実装済** |",
+          "| **S6** | Phase 2 | Board UI | 必須 | E2E | **実装済** |",
+          "| **S7** | Phase 3 | Worker | 不要 | test | **実装済** |",
+          "| **S8** | Phase 3 | Full E2E | 変更時のみ | E2E | **実装済** |",
+          "",
+          "| 項目 | 現状 | 扱い |",
+          "| --- | --- | --- |",
+          "| Muse の正式名称・URL | 未特定（`#19` 起票済） | 特定後に追加 |",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(root, "docs", "bot-integration.md"),
+        [
+          "# Bot",
+          "",
+          "| 経路 | 実証項目 | 現在 |",
+          "| --- | --- | --- |",
+          "| ChatGPT公式クライアント | 検証 | 対応済 |",
+          "| Claude公式クライアント | 検証 | 検証済 |",
+          "| Grok APIワーカー | 検証 | 未実施 |",
+          "| Muse | 検証 | 未特定 |",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(join(root, "docs", "concept.md"), "# Concept\n\n現在4種類対応済みです。\n");
+    });
+
+    expect(undeployedS4Report.ok).toBe(false);
+    expect(
+      undeployedS4Report.errors.some(
+        (e) =>
+          e.includes('Channel "ChatGPT公式クライアント"') &&
+          e.includes("before Slice S4 is implemented and deployed"),
+      ),
+    ).toBe(true);
+    expect(
+      undeployedS4Report.errors.some(
+        (e) =>
+          e.includes('Channel "Claude公式クライアント"') &&
+          e.includes("before Slice S4 is implemented and deployed"),
+      ),
+    ).toBe(true);
+    expect(
+      undeployedS4Report.errors.some((e) => e.includes("Premature blanket Bot support claim")),
+    ).toBe(true);
+
+    // Even after S4 is deployed & S8 is implemented, Muse must stay 未特定 while unidentified in §4
+    const museClaimAfterDeployReport = createMinimalDocsRepo((root) => {
+      writeFileSync(
+        join(root, "docs", "implementation-plan.md"),
+        [
+          "# Plan",
+          "",
+          "| Slice | Phase | スコープ | UI Artifact | 主な検証対象 | 状態 |",
+          "| --- | --- | --- | --- | --- | --- |",
+          "| **S0** | Phase 1 | Guardrails | 不要 | CI | **実装済** |",
+          "| **S1** | Phase 1 | DB | 不要 | test | **実装済** |",
+          "| **S2** | Phase 1 | Bot | 不要 | test | **実装済** |",
+          "| **S3** | Phase 1 | Human | 不要 | test | **実装済** |",
+          "| **S4** | Phase 1 | OAuth | 必須 | MCP | **実装済** |",
+          "| **S5** | Phase 2 | Card UI | 必須 | E2E | **実装済** |",
+          "| **S6** | Phase 2 | Board UI | 必須 | E2E | **実装済** |",
+          "| **S7** | Phase 3 | Worker | 不要 | test | **実装済** |",
+          "| **S8** | Phase 3 | Full E2E | 変更時のみ | E2E | **実装済** |",
+          "",
+          "| 項目 | 現状 | 扱い |",
+          "| --- | --- | --- |",
+          "| Muse の正式名称・URL | 未特定（`#19` 起票済） | 特定後に追加 |",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(root, "docs", "bot-integration.md"),
+        [
+          "# Bot",
+          "",
+          "| 経路 | 実証項目 | 現在 |",
+          "| --- | --- | --- |",
+          "| ChatGPT公式クライアント | 検証 | 対応済 |",
+          "| Claude公式クライアント | 検証 | 対応済 |",
+          "| Grok APIワーカー | 検証 | 対応済 |",
+          "| Muse | 検証 | 対応済 |",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    expect(museClaimAfterDeployReport.ok).toBe(false);
+    expect(
+      museClaimAfterDeployReport.errors.some(
+        (e) => e.includes('Channel "Muse"') && e.includes('must remain "未特定"'),
+      ),
+    ).toBe(true);
+  });
 });

@@ -492,21 +492,38 @@ function checkHeadingsAndProhibitionBullets(
   return bulletCount;
 }
 
-function parseImplementedSlices(
+interface PlanStatusInfo {
+  readonly implementedSlices: ReadonlySet<string>;
+  readonly deployedSlices: ReadonlySet<string>;
+  readonly museUnidentified: boolean;
+}
+
+const CODE_ONLY_UNDEPLOYED_PATTERN = /(?:コード実装済|デプロイ[^\s|]*(?:後|待)|未デプロイ)/;
+const BLANKET_ALL_BOTS_CLAIM_PATTERN = /(?:4種類対応済|全\s*Bot\s*対応済|全経路対応済)/i;
+const NEGATED_CLAIM_CONTEXT_PATTERN =
+  /(?:表示しない|記載しない|対応済みにしない|数えない|保証しない|禁止|未実施|未確認)/;
+
+function parsePlanStatusInfo(
   realRepoRoot: string,
   parsedPlan: ParsedMarkdown | undefined,
   errors: string[],
-): ReadonlySet<string> {
+): PlanStatusInfo {
   const planPath = join(realRepoRoot, "docs", "implementation-plan.md");
   if (!existsSync(planPath) || parsedPlan === undefined) {
     errors.push("docs/implementation-plan.md:1: Missing required implementation plan document.");
-    return new Set<string>();
+    return {
+      implementedSlices: new Set<string>(),
+      deployedSlices: new Set<string>(),
+      museUnidentified: false,
+    };
   }
 
   const implemented = new Set<string>();
+  const deployed = new Set<string>();
   const seenSlices = new Set<string>();
   let sliceColIndex = -1;
   let statusColIndex = -1;
+  let museUnidentified = false;
 
   for (const { lineNumber, text } of parsedPlan.proseLines) {
     if (!text.trim().startsWith("|")) {
@@ -515,6 +532,11 @@ function parseImplementedSlices(
     const cells = splitMarkdownTableRow(text);
     if (cells.length < 2) {
       continue;
+    }
+
+    // Detect §4 Muse status row (e.g. | Muse の正式名称・URL | 未特定（`#19` 起票済） | ... |)
+    if (cells.some((c) => /\bMuse\b/i.test(c)) && cells.some((c) => /未特定/.test(c))) {
+      museUnidentified = true;
     }
 
     if (sliceColIndex === -1) {
@@ -545,6 +567,9 @@ function parseImplementedSlices(
 
     if (/(?:実装済|検証済|完了)/.test(statusCell) && !/(?:未着手|未実装)/.test(statusCell)) {
       implemented.add(sliceId);
+      if (!CODE_ONLY_UNDEPLOYED_PATTERN.test(statusCell)) {
+        deployed.add(sliceId);
+      }
     } else if (!/(?:未着手|未実装)/.test(statusCell)) {
       errors.push(
         `docs/implementation-plan.md:${lineNumber}: Unrecognized status "${statusCell}" for slice ${sliceId}.`,
@@ -560,12 +585,17 @@ function parseImplementedSlices(
     }
   }
 
-  return implemented;
+  return {
+    implementedSlices: implemented,
+    deployedSlices: deployed,
+    museUnidentified,
+  };
 }
 
 function checkUnverifiedBotStatusClaims(
   parsedBotDoc: ParsedMarkdown | undefined,
-  implementedSlices: ReadonlySet<string>,
+  parsedByRelPath: ReadonlyMap<string, ParsedMarkdown>,
+  planStatus: PlanStatusInfo,
   errors: string[],
 ): void {
   if (parsedBotDoc === undefined) {
@@ -576,6 +606,7 @@ function checkUnverifiedBotStatusClaims(
   let channelColIndex = -1;
   let statusColIndex = -1;
   let verifiedTableRows = 0;
+  let hasUnverifiedChannel = false;
 
   for (const { lineNumber, text } of parsedBotDoc.proseLines) {
     if (!text.trim().startsWith("|")) {
@@ -605,13 +636,27 @@ function checkUnverifiedBotStatusClaims(
     const channelName = cells[channelColIndex] ?? "";
     const currentStatus = cells[statusColIndex] ?? "";
 
-    if (!implementedSlices.has("S4")) {
+    if (currentStatus === "未実施" || currentStatus === "未特定") {
+      hasUnverifiedChannel = true;
+    }
+
+    if (
+      planStatus.museUnidentified &&
+      /\bMuse\b/i.test(channelName) &&
+      currentStatus !== "未特定"
+    ) {
+      errors.push(
+        `docs/bot-integration.md:${lineNumber}: Channel "${channelName}" must remain "未特定" while Muse is unidentified in docs/implementation-plan.md (found "${currentStatus}").`,
+      );
+    }
+
+    if (!planStatus.deployedSlices.has("S4")) {
       if (currentStatus !== "未実施" && currentStatus !== "未特定") {
         errors.push(
-          `docs/bot-integration.md:${lineNumber}: Channel "${channelName}" has status "${currentStatus}" before Slice S4 is implemented (must be 未実施 or 未特定).`,
+          `docs/bot-integration.md:${lineNumber}: Channel "${channelName}" has status "${currentStatus}" before Slice S4 is implemented and deployed (must be 未実施 or 未特定).`,
         );
       }
-    } else if (!implementedSlices.has("S8") && /(?:対応済)/.test(currentStatus)) {
+    } else if (!planStatus.implementedSlices.has("S8") && /(?:対応済)/.test(currentStatus)) {
       errors.push(
         `docs/bot-integration.md:${lineNumber}: Channel "${channelName}" cannot be marked 対応済 before Slice S8 end-to-end verification.`,
       );
@@ -622,6 +667,25 @@ function checkUnverifiedBotStatusClaims(
     errors.push(
       "docs/bot-integration.md:1: Missing or incomplete Bot verification status table (expected >= 4 channel rows).",
     );
+  }
+
+  if (hasUnverifiedChannel || !planStatus.deployedSlices.has("S4")) {
+    for (const [relPath, parsed] of parsedByRelPath) {
+      for (const { lineNumber, text } of parsed.proseLines) {
+        if (PROHIBITION_LINE_PATTERN.test(text)) {
+          continue;
+        }
+        const sanitized = stripInlineCodeSpans(text);
+        if (
+          BLANKET_ALL_BOTS_CLAIM_PATTERN.test(sanitized) &&
+          !NEGATED_CLAIM_CONTEXT_PATTERN.test(sanitized)
+        ) {
+          errors.push(
+            `${relPath}:${lineNumber}: Premature blanket Bot support claim while unverified channels remain in docs/bot-integration.md §8.`,
+          );
+        }
+      }
+    }
   }
 }
 
@@ -809,7 +873,7 @@ export function validateRepositoryGuardrails(repoRoot: string): GuardrailCheckRe
     parsedByRelPath.set(relFilePath, parseMarkdownFences(relFilePath, content, errors));
   }
 
-  const implementedSlices = parseImplementedSlices(
+  const planStatus = parsePlanStatusInfo(
     realRepoRoot,
     parsedByRelPath.get("docs/implementation-plan.md"),
     errors,
@@ -831,14 +895,15 @@ export function validateRepositoryGuardrails(repoRoot: string): GuardrailCheckRe
       realRepoRoot,
       relFilePath,
       parsed.proseLines,
-      implementedSlices,
+      planStatus.implementedSlices,
       errors,
     );
   }
 
   checkUnverifiedBotStatusClaims(
     parsedByRelPath.get("docs/bot-integration.md"),
-    implementedSlices,
+    parsedByRelPath,
+    planStatus,
     errors,
   );
 

@@ -1,6 +1,6 @@
 # システム構成・技術スタック仕様
 
-作成日：2026-11-18 ／ 状態：構成基準（S0〜S7 コード実装済 ／ S4 検証環境デプロイは認証情報設定後・全12件AC縦通しE2Eは S8 で実装）
+作成日：2026-11-18 ／ 状態：構成基準（S0〜S8 コード・全12件AC自動縦通しE2E 実装済 ／ S4 検証環境デプロイ・外部実機実証は認証情報設定後）
 
 ## 1. 技術スタック
 
@@ -17,7 +17,7 @@
 | DB / ORM                | **Cloudflare D1**（SQLite互換）+ **Drizzle ORM**（`bun test` 時は `bun:sqlite`）                                                            | 全スキーマ・`0001_initial.sql`・Partial Unique・`CHECK`・`_batch_guard` 付 `guardedBatch` 実装済                                       | 実装済（S1）                               |
 | 非同期・5秒確定・Worker | **Cloudflare Queues**（`decision-finalize` / `bot-work` / `bot-work-dlq`）+ **Cron Triggers**                                               | 5秒確定Consumer（S3）＋`bot-work`（1有界ステップ・`budget_limit`・`DEC-03`再確認）・`bot-work-dlq`（`BOT-03`）・Cron 4責務（S7）実装済 | 実装済（S3, S7）                           |
 | 認証・認可              | **Better Auth** (`better-auth` + Drizzle Adapter + `jwt` + `@better-auth/mcp`)                                                              | Human: 単一オーナー GitHub OAuth・`/sign-in`・`/consent` 実装済<br>Bot: RFC 9728/8414・DCR・同意時D1 Upsert・JWT検証実装済             | コード実装済（S2〜S4・検証環境デプロイ待） |
-| UI E2E検証              | Playwright（`bunx playwright test`）                                                                                                        | SP 360px/320px・PC全6画面・誤スワイプ防止・44×44px・2段階失効・読取専用カンバン検証                                                    | 実装済（S4〜S6：CI稼働中）                 |
+| UI・縦通し E2E 検証     | Playwright（`bun run test:e2e` / `bun run test:e2e:fullstack`）                                                                             | 全6画面 UI E2E（SP 360/320px・PC）＋実HTTP/MCP/SQLite/Queue 結線による全12件AC自動縦通しE2E                                            | 実装済（S4〜S6, S8：CI稼働中）             |
 
 - 禁止：Bun外のフォーマッター・リンター・単体テストランナー（Prettier / ESLint / Biome / Vitest 等）を追加導入すること（強制: `tests/guardrails/repo-guardrails.test.ts`）
 - 禁止：Cloudflareリソースを手動変更のみで運用すること（`infra/` の Pulumi 定義を正とする）（強制: `infra/index.ts`, `tests/guardrails/infra-guardrails.test.ts`）
@@ -117,17 +117,18 @@ flowchart TD
 
 ## 5. 自動検証コマンドと機械的ガードレール（Subagent / CI Gate 基準）
 
-| コマンド                   | 実行内容                                                                                                                               | PR合格基準     | 状態                          |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------- |
-| `bun fmt --check`          | `bunfig.toml` `[fmt]`（`sortImports`, `sortPackageJson`）に基づく整形検査                                                              | 差分 0         | 稼働中（CI + `main` Ruleset） |
-| `bun lint`                 | `bunfig.toml` `[lint]`（`typeAware = true`, `maxWarnings = 0`, 全層DAG越境遮断, `as`・`src/`内 `@ts-expect-error`・`no-console` 禁止） | エラー・警告 0 | 稼働中（CI + `main` Ruleset） |
-| `bun check`                | `tsconfig.json`（TS7 strict群 + Unique Symbol 証票ブランド型）による全層型検査                                                         | エラー 0       | 稼働中（CI + `main` Ruleset） |
-| `bun run check:guardrails` | `scripts/check-guardrails.ts`（`禁止：` 強制先タグ実在・相対リンク・Mermaid構文・経緯見出し・未実証 `対応済` 検査）                    | エラー 0       | 稼働中（CI + `main` Ruleset） |
-| `bun test`                 | `tests/guardrails/`（禁止依存・シングルトン不在・Lint境界実働検証・docs/証票/ロガー検査）および単体/結合テスト                         | 全件 Pass      | 稼働中（CI + `main` Ruleset） |
-| `bun run build`            | `vite build` による Web UI プロダクションバンドル検証（`dist/client/`）                                                                | エラー 0       | 稼働中（CI + `main` Ruleset） |
-| `bun run build:worker`     | `bun build` による Cloudflare Workers バンドル検証（`dist/worker/index.js`）                                                           | エラー 0       | 稼働中（CI + `main` Ruleset） |
-| `bun run infra:preview`    | `infra/preview.ts`（認証時は `pulumi preview`、未認証CI時は IaC バンドル検証）                                                         | エラー 0       | 稼働中（CI + `main` Ruleset） |
-| `bun run test:e2e`         | `bunx playwright test`（SP 360px/320px・PC 認証/同意・判断UI 3方式/5秒取消/誤スワイプ防止・状況/履歴/設定3画面）                       | 全件 Pass      | 稼働中（CI + `main` Ruleset） |
+| コマンド                     | 実行内容                                                                                                                                   | PR合格基準     | 状態                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------- | ----------------------------- |
+| `bun fmt --check`            | `bunfig.toml` `[fmt]`（`sortImports`, `sortPackageJson`）に基づく整形検査                                                                  | 差分 0         | 稼働中（CI + `main` Ruleset） |
+| `bun lint`                   | `bunfig.toml` `[lint]`（`typeAware = true`, `maxWarnings = 0`, 全層DAG越境遮断, `as`・`src/`内 `@ts-expect-error`・`no-console` 禁止）     | エラー・警告 0 | 稼働中（CI + `main` Ruleset） |
+| `bun check`                  | `tsconfig.json`（TS7 strict群 + Unique Symbol 証票ブランド型）による全層型検査                                                             | エラー 0       | 稼働中（CI + `main` Ruleset） |
+| `bun run check:guardrails`   | `scripts/check-guardrails.ts`（`禁止：` 強制先タグ実在・相対リンク・Mermaid構文・経緯見出し・未実証 `対応済` 検査）                        | エラー 0       | 稼働中（CI + `main` Ruleset） |
+| `bun test`                   | `tests/guardrails/`（禁止依存・シングルトン不在・Lint境界実働検証・docs/証票/ロガー検査）および単体/結合テスト                             | 全件 Pass      | 稼働中（CI + `main` Ruleset） |
+| `bun run build`              | `vite build` による Web UI プロダクションバンドル検証（`dist/client/`）                                                                    | エラー 0       | 稼働中（CI + `main` Ruleset） |
+| `bun run build:worker`       | `bun build` による Cloudflare Workers バンドル検証（`dist/worker/index.js`）                                                               | エラー 0       | 稼働中（CI + `main` Ruleset） |
+| `bun run infra:preview`      | `infra/preview.ts`（認証時は `pulumi preview`、未認証CI時は IaC バンドル検証）                                                             | エラー 0       | 稼働中（CI + `main` Ruleset） |
+| `bun run test:e2e`           | `bunx playwright test`（SP 360px/320px・PC 認証/同意・判断UI 3方式/5秒取消/誤スワイプ防止・状況/履歴/設定3画面）                           | 全件 Pass      | 稼働中（CI + `main` Ruleset） |
+| `bun run test:e2e:fullstack` | `playwright.fullstack.config.ts`（実SPA・Better Auth・Human API・MCP・SQLite D1・Queue/DLQ 結線の全12件AC自動縦通しE2E：SP 360/320px・PC） | 全件 Pass      | 稼働中（CI + `main` Ruleset） |
 
 - 禁止：型アサーション（`as`）や `src/` 内の `@ts-expect-error` を用いて型検査・証票型をバイパスすること（`consistent-type-assertions = "never"`・`ban-ts-comment` で遮断）（強制: `bunfig.toml`）
 - 禁止：不要な `eslint-disable` コメントを残すこと（`reportUnusedDisableDirectives = "error"` で遮断）（強制: `bunfig.toml`）
