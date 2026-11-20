@@ -4,24 +4,24 @@
 
 ## 1. 技術スタック
 
-| 区分                    | 採用技術                                                                                                          | 役割・境界                                                                                                          | 状態                   |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| Runtime・ツールチェイン | **Bun** (`>=1.4.6-0`、CIは `bun@1.4.5-canary.20261119.1` 固定：`bun check` / `bun fmt` / `bun lint` / `bun test`) | パッケージ管理・型検査・整形・静的解析・単体/結合テストをBun組み込み機能に統一                                      | 実装済（S0）           |
-| CI・機械的ガードレール  | **GitHub Actions** (`ci.yml`) + **Git Hooks** (`.githooks/pre-commit`) + `bunfig.toml` + **`main` Ruleset**       | レイヤー越境遮断・型アサーション禁止・証票ブランド型・構造テスト・`ci` Green 必須化を強制                           | 実装済（S0）           |
-| クラウド実行基盤        | **Cloudflare Workers**（Static Assets + HTTP + Queue Consumer + Cron）                                            | UI配信・Human API・MCP・ワーカー処理を単一プラットフォームで実行                                                    | 未実装                 |
-| IaC（構成管理）         | **Pulumi** (`@pulumi/cloudflare`, `runtime: bun`, `infra/`)                                                       | Workers・D1・Queues・QueueConsumer・Cron・Route をコード管理                                                        | 未実装                 |
-| Web UI                  | React + Vite + Tailwind CSS（Workers Static Assets 配信）                                                         | SP（360/320px基準）・PC対応のSPA（`/sign-in`・`/consent` 含む）                                                     | 未実装                 |
-| HTTP API / ルーター     | **Hono**                                                                                                          | `/api/*`・`/.well-known/*` ルーティング、CSRF・認可ミドルウェア                                                     | 未実装                 |
-| MCP Server              | `@modelcontextprotocol/server`（MCP TypeScript SDK v2・Stateless Streamable HTTP）                                | `/api/mcp` でBot向け12ツールを公開                                                                                  | 未実装                 |
-| 入力検証                | `Zod`                                                                                                             | Human API と MCP JSON Schema の型・制約を共通化                                                                     | 未実装                 |
-| DB / ORM                | **Cloudflare D1**（SQLite互換）+ **Drizzle ORM**（`bun test` 時は `bun:sqlite`）                                  | 条件付き原子更新・ガード付き `db.batch`・楽観ロック・冪等キー永続化                                                 | 未実装                 |
-| 非同期・5秒確定・Worker | **Cloudflare Queues**（`decision-finalize` / `bot-work` / `bot-work-dlq`）+ **Cron Triggers**                     | 5秒仮確定の満了処理、判断確定イベントからの有界ステップ実行、期限切れ回収                                           | 未実装                 |
-| 認証・認可              | **Better Auth** (`better-auth` + Drizzle Adapter + `jwt` + `@better-auth/mcp`)                                    | Human: `/api/auth/*` セッション認証<br>Bot: OAuth 2.1（`/.well-known/*` 公開）＋ `BotConnection` D1リアルタイム照合 | 証票型のみ実装済（S0） |
-| UI E2E検証              | Playwright（`bunx playwright test`）                                                                              | UI変更時のSP 360px/320px・PC代替操作・誤スワイプ防止検証                                                            | 未実装                 |
+| 区分                    | 採用技術                                                                                                                                    | 役割・境界                                                                                                          | 状態                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| Runtime・ツールチェイン | **Bun** (`>=1.4.6-0`、CIは `bun@1.4.5-canary.20261119.1` 固定：`bun check` / `bun fmt` / `bun lint` / `bun test`)                           | パッケージ管理・型検査・整形・静的解析・単体/結合テストをBun組み込み機能に統一                                      | 実装済（S0）           |
+| CI・機械的ガードレール  | **GitHub Actions** (`ci.yml`) + **Git Hooks** (`.githooks/pre-commit`) + `bunfig.toml` + `scripts/check-guardrails.ts` + **`main` Ruleset** | レイヤー越境遮断・型アサーション禁止・証票ブランド型・docs/強制先検査・`ci` Green 必須化を強制                      | 実装済（S0）           |
+| クラウド実行基盤        | **Cloudflare Workers**（Static Assets + HTTP + Queue Consumer + Cron）                                                                      | UI配信・Human API・MCP・ワーカー処理を単一プラットフォームで実行                                                    | 未実装                 |
+| IaC（構成管理）         | **Pulumi** (`@pulumi/cloudflare`, `runtime: bun`, `infra/`)                                                                                 | Workers・D1・Queues・QueueConsumer・Cron・Route をコード管理                                                        | 未実装                 |
+| Web UI                  | React + Vite + Tailwind CSS（Workers Static Assets 配信）                                                                                   | SP（360/320px基準）・PC対応のSPA（`/sign-in`・`/consent` 含む）                                                     | 未実装                 |
+| HTTP API / ルーター     | **Hono**                                                                                                                                    | `/api/*`・`/.well-known/*` ルーティング、CSRF・認可ミドルウェア                                                     | 未実装                 |
+| MCP Server              | `@modelcontextprotocol/server`（MCP TypeScript SDK v2・Stateless Streamable HTTP）                                                          | `/api/mcp` でBot向け12ツールを公開                                                                                  | 未実装                 |
+| 入力検証                | `Zod`                                                                                                                                       | Human API と MCP JSON Schema の型・制約を共通化                                                                     | 未実装                 |
+| DB / ORM                | **Cloudflare D1**（SQLite互換）+ **Drizzle ORM**（`bun test` 時は `bun:sqlite`）                                                            | 条件付き原子更新・ガード付き `db.batch`・楽観ロック・冪等キー永続化                                                 | 未実装                 |
+| 非同期・5秒確定・Worker | **Cloudflare Queues**（`decision-finalize` / `bot-work` / `bot-work-dlq`）+ **Cron Triggers**                                               | 5秒仮確定の満了処理、判断確定イベントからの有界ステップ実行、期限切れ回収                                           | 未実装                 |
+| 認証・認可              | **Better Auth** (`better-auth` + Drizzle Adapter + `jwt` + `@better-auth/mcp`)                                                              | Human: `/api/auth/*` セッション認証<br>Bot: OAuth 2.1（`/.well-known/*` 公開）＋ `BotConnection` D1リアルタイム照合 | 証票型のみ実装済（S0） |
+| UI E2E検証              | Playwright（`bunx playwright test`）                                                                                                        | UI変更時のSP 360px/320px・PC代替操作・誤スワイプ防止検証                                                            | 未実装                 |
 
-- 禁止：Bun外のフォーマッター・リンター・単体テストランナー（Prettier / ESLint / Biome / Vitest 等）を追加導入すること
-- 禁止：Cloudflareリソースを手動変更のみで運用すること（`infra/` の Pulumi 定義を正とする）
-- 禁止：未実証のBot接続経路やデプロイ環境を「対応済」と記載すること
+- 禁止：Bun外のフォーマッター・リンター・単体テストランナー（Prettier / ESLint / Biome / Vitest 等）を追加導入すること（強制: `tests/guardrails/repo-guardrails.test.ts`）
+- 禁止：Cloudflareリソースを手動変更のみで運用すること（`infra/` の Pulumi 定義を正とする）（強制: `S1予定`）
+- 禁止：未実証のBot接続経路やデプロイ環境を「対応済」と記載すること（強制: `scripts/check-guardrails.ts`）
 
 ---
 
@@ -84,11 +84,11 @@ flowchart TD
   SSVC --> DB
 ```
 
-- 禁止：Better Auth インスタンスや Drizzle(D1) クライアントをモジュールスコープのシングルトンにすること（リクエスト毎に `env.DB` と `ctx.waitUntil` を渡して生成する）
-- 禁止：`/api/mcp` でローカルJWT検証のみを通し D1 の `bot_connections` 照合を省略すること（即時失効・一時停止・スコープ縮小を毎リクエスト強制する、`BOT-02`）
-- 禁止：UI・ルーター・MCPハンドラから `src/db/` を直接参照・更新すること
-- 禁止：`MCP` ハンドラおよび `Queue / Cron Handler` から `src/services/human/`（採用・見送り・取消・保留・権限変更）を呼ぶこと（`BOT-02`）
-- 禁止：モデルAPI秘密鍵・`BETTER_AUTH_SECRET`・接続トークン平文をクライアントバンドル・カード本文・ログ・Gitへ出力すること
+- 禁止：Better Auth インスタンスや Drizzle(D1) クライアントをモジュールスコープのシングルトンにすること（リクエスト毎に `env.DB` と `ctx.waitUntil` を渡して生成する）（強制: `tests/guardrails/repo-guardrails.test.ts`）
+- 禁止：`/api/mcp` でローカルJWT検証のみを通し D1 の `bot_connections` 照合を省略すること（即時失効・一時停止・スコープ縮小を毎リクエスト強制する、`BOT-02`）（強制: `src/auth/bot.ts`, `tests/guardrails/auth-and-boundaries.test.ts`, `S2予定`）
+- 禁止：UI・ルーター・MCPハンドラから `src/db/` を直接参照・更新すること（強制: `bunfig.toml`）
+- 禁止：`MCP` ハンドラおよび `Queue / Cron Handler` から `src/services/human/`（採用・見送り・取消・保留・権限変更）を呼ぶこと（`BOT-02`）（強制: `bunfig.toml`）
+- 禁止：モデルAPI秘密鍵・`BETTER_AUTH_SECRET`・接続トークン平文をクライアントバンドル・カード本文・ログ・Gitへ出力すること（強制: `bunfig.toml`, `src/shared/logger.ts`, `.gitignore`）
 
 ---
 
@@ -107,21 +107,23 @@ flowchart TD
 | `src/db/`              | Drizzle スキーマ（Better Auth + ドメイン）、マイグレーション、条件ガード付き `db.batch` ヘルパー                                            | `src/db/` 外での Drizzle SQLite/D1 生成禁止・先行 `UPDATE` 0件一致時の後続SQL抑止ガード必須                               |
 | `src/worker/`          | Cloudflare Worker エントリ（`fetch`, `queue`, `scheduled`）、キュー名分岐とメッセージ単位 `ack()/retry()`                                   | 無限再提案ループ禁止・DLQ到達時はTaskを `failed`（理由付）へ遷移（`BOT-03`）                                              |
 | `src/shared/`          | マスク処理済み構造化ロガー（`src/shared/logger.ts`）                                                                                        | `no-console` 唯一許可箇所（秘密鍵・PEM・`Bearer`・循環参照・`Error` の安全な直列化必須）                                  |
+| `scripts/`             | `docs/` 規約・強制先タグ・相対リンク・Mermaid 構文の決定論的検査（`check-guardrails.ts`）                                                   | ネットワーク通信・`src/` との相互参照禁止（`bun lint` で強制）                                                            |
 | `infra/`               | Pulumi（`Pulumi.yaml`, `index.ts`）による Cloudflare リソース定義                                                                           | 手動変更禁止・シークレットは暗号化管理                                                                                    |
-| `tests/`               | `guardrails/`（構造・境界検査）、`unit/`（`bun:test`）、`integration/`（`bun:test` + `bun:sqlite`）、`e2e/`（Playwright）                   | [企画・要件書](concept.md) の AC ID およびレイヤー境界と対応付け                                                          |
+| `tests/`               | `guardrails/`（構造・境界・docs検査）、`unit/`（`bun:test`）、`integration/`（`bun:test` + `bun:sqlite`）、`e2e/`（Playwright）             | [企画・要件書](concept.md) の AC ID およびレイヤー境界と対応付け                                                          |
 
 ---
 
 ## 5. 自動検証コマンドと機械的ガードレール（Subagent / CI Gate 基準）
 
-| コマンド                | 実行内容                                                                                                                               | PR合格基準                  | 状態                          |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ----------------------------- |
-| `bun fmt --check`       | `bunfig.toml` `[fmt]`（`sortImports`, `sortPackageJson`）に基づく整形検査                                                              | 差分 0                      | 稼働中（CI + `main` Ruleset） |
-| `bun lint`              | `bunfig.toml` `[lint]`（`typeAware = true`, `maxWarnings = 0`, 全層DAG越境遮断, `as`・`src/`内 `@ts-expect-error`・`no-console` 禁止） | エラー・警告 0              | 稼働中（CI + `main` Ruleset） |
-| `bun check`             | `tsconfig.json`（TS7 strict群 + Unique Symbol 証票ブランド型）による全層型検査                                                         | エラー 0                    | 稼働中（CI + `main` Ruleset） |
-| `bun test`              | `tests/guardrails/`（禁止依存・シングルトン不在・Lint境界実働検証・証票/ロガー境界）および単体/結合テスト                              | 全件 Pass                   | 稼働中（CI + `main` Ruleset） |
-| `bun run infra:preview` | `pulumi preview` による Cloudflare 構成差分の検証                                                                                      | エラー 0（`infra/` 変更時） | `S1` で追加                   |
-| `bun run test:e2e`      | `bunx playwright test`（SP 360px/320px・PCボタン/キーボード・誤スワイプ防止）                                                          | 全件 Pass（UI変更時）       | `S4`〜`S5` で追加             |
+| コマンド                   | 実行内容                                                                                                                               | PR合格基準                  | 状態                          |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ----------------------------- |
+| `bun fmt --check`          | `bunfig.toml` `[fmt]`（`sortImports`, `sortPackageJson`）に基づく整形検査                                                              | 差分 0                      | 稼働中（CI + `main` Ruleset） |
+| `bun lint`                 | `bunfig.toml` `[lint]`（`typeAware = true`, `maxWarnings = 0`, 全層DAG越境遮断, `as`・`src/`内 `@ts-expect-error`・`no-console` 禁止） | エラー・警告 0              | 稼働中（CI + `main` Ruleset） |
+| `bun check`                | `tsconfig.json`（TS7 strict群 + Unique Symbol 証票ブランド型）による全層型検査                                                         | エラー 0                    | 稼働中（CI + `main` Ruleset） |
+| `bun run check:guardrails` | `scripts/check-guardrails.ts`（`禁止：` 強制先タグ実在・相対リンク・Mermaid構文・経緯見出し・未実証 `対応済` 検査）                    | エラー 0                    | 稼働中（CI + `main` Ruleset） |
+| `bun test`                 | `tests/guardrails/`（禁止依存・シングルトン不在・Lint境界実働検証・docs/証票/ロガー検査）および単体/結合テスト                         | 全件 Pass                   | 稼働中（CI + `main` Ruleset） |
+| `bun run infra:preview`    | `pulumi preview` による Cloudflare 構成差分の検証                                                                                      | エラー 0（`infra/` 変更時） | `S1` で追加                   |
+| `bun run test:e2e`         | `bunx playwright test`（SP 360px/320px・PCボタン/キーボード・誤スワイプ防止）                                                          | 全件 Pass（UI変更時）       | `S4`〜`S5` で追加             |
 
-- 禁止：型アサーション（`as`）や `src/` 内の `@ts-expect-error` を用いて型検査・証票型をバイパスすること（`consistent-type-assertions = "never"`・`ban-ts-comment` で遮断）
-- 禁止：不要な `eslint-disable` コメントを残すこと（`reportUnusedDisableDirectives = "error"` で遮断）
+- 禁止：型アサーション（`as`）や `src/` 内の `@ts-expect-error` を用いて型検査・証票型をバイパスすること（`consistent-type-assertions = "never"`・`ban-ts-comment` で遮断）（強制: `bunfig.toml`）
+- 禁止：不要な `eslint-disable` コメントを残すこと（`reportUnusedDisableDirectives = "error"` で遮断）（強制: `bunfig.toml`）

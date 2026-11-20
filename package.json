@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "check": "bun check",
+    "check:guardrails": "bun run scripts/check-guardrails.ts",
     "fmt": "bun fmt",
     "fmt:check": "bun fmt --check",
     "lint": "bun lint",
     "prepare": "git config core.hooksPath .githooks || true",
     "test": "bun test",
-    "verify": "bun fmt --check && bun lint && bun check && bun test"
+    "verify": "bun fmt --check && bun lint && bun check && bun run check:guardrails && bun test"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4"
