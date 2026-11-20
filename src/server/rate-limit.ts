@@ -68,6 +68,14 @@ export function createMemoryRateLimiter(options: {
   };
 }
 
+export function extractTrustedClientIp(request: Request): string {
+  const cfIp = request.headers.get("cf-connecting-ip")?.trim();
+  if (cfIp !== undefined && cfIp !== "") {
+    return cfIp;
+  }
+  return "shared-fallback";
+}
+
 export async function enforceRateLimit(
   limiter: RequestRateLimiter | undefined,
   key: string,

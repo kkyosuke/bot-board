@@ -1,6 +1,6 @@
 # 実装計画・Issue分割マップ
 
-作成日：2026-11-18 ／ 状態：計画基準（S0・S1・S2・S5 実装済 ／ S3〜S4・S6〜S8 未着手）
+作成日：2026-11-18 ／ 状態：計画基準（S0〜S3・S5 実装済 ／ S4・S6〜S8 未着手）
 
 ## 1. フェーズと実装スライス依存フロー
 
@@ -31,7 +31,7 @@ flowchart TD
 | **S0** (#4, #6) | Phase 1 | Bun初期化（`package.json` / `tsconfig.json` / `bunfig.toml`）、レイヤー越境遮断・`as` 禁止・マスクロガー、証票ブランド型（`OwnerContext` / `VerifiedBotContext`）、`scripts/check-guardrails.ts`（`docs/`・強制先検査）、`tests/guardrails/`、`.githooks/pre-commit`、GitHub Actions CI（`ci.yml`）＋ `main` Ruleset 必須化   |                不要                | `bun fmt --check / lint / check / check:guardrails / test`、`BOT-02`（静的・型境界）                                              | **実装済** |
 |  **S1** (#10)   | Phase 1 | Hono・Zod・Drizzle・Better Auth 導入、Pulumi（`infra/`：`WorkersScript / D1Database / Queue×3 / QueueConsumer×3 / WorkersCronTrigger / RateLimit / Domain・Route`）定義、Better Auth＋ドメイン全テーブル・Partial Unique / `CHECK`・`guardedBatch`・`src/server/app.ts`・`build:worker`、`Task` / `DecisionCard` 純粋状態遷移 |                不要                | `bun fmt --check / lint / check / check:guardrails / test / build:worker / infra:preview`、`DEC-01`, `DEC-03`, `DEC-04`, `BOT-03` | **実装済** |
 |  **S2** (#11)   | Phase 1 | `src/services/bot/`、`/api/mcp`（`@modelcontextprotocol/server` 12ツール・成果Upsert含む）、`request_id` 冪等性、`WorkLease` 排他、`bot_connections` D1照合認可（`scopes` / `paused` / `revoked` 境界）、`/api/mcp` レート制限（`429 RATE_LIMITED`）                                                                          |                不要                | `BOT-02`, `DEC-02`（`bun test` 結合テスト）                                                                                       | **実装済** |
-|  **S3** (#12)   | Phase 1 | Better Auth 基盤（`/api/auth/*`・GitHub OAuth 単一オーナー制限）、`/api/human/*` 全13本（CSRF検証・レート制限付）、`src/services/system/` と `decision-finalize` 用 `queue()` Consumer＋読取時オンデマンド確定、5秒取消排他、候補グループロック、古い版の再確認カード化                                                       |                不要                | `DEC-01`〜`04`, `BOT-02`（`bun test` 結合テスト）                                                                                 | 未着手     |
+|  **S3** (#12)   | Phase 1 | Better Auth 基盤（`/api/auth/*`・GitHub OAuth 単一オーナー制限）、`/api/human/*` 全13本（CSRF検証・レート制限付）、`src/services/system/` と `decision-finalize` 用 `queue()` Consumer＋読取時オンデマンド確定、5秒取消排他、候補グループロック、古い版の再確認カード化                                                       |                不要                | `DEC-01`〜`04`, `BOT-02`（`bun test` 結合テスト）                                                                                 | **実装済** |
 |  **S4** (#13)   | Phase 1 | オーナー `/sign-in`・OAuth `/consent` 画面実装、共通SPAルーティング、`@better-auth/mcp`（OAuth 2.1・`/.well-known/*`・DCR・同意時 `bot_connections` Upsert）設定、Pulumi 検証環境反映、OAuth 発行・失効スモーク検証                                                                                                           | **必須**（`/sign-in`・`/consent`） | [bot-integration.md](bot-integration.md) 8章・`BOT-02`（Unit + Playwright SP/PC）                                                 | 未着手     |
 |   **S5** (#8)   | Phase 2 | 判断画面UI（2択・単一複数択・複数チェック統一操作、SP 360/320px、横スワイプ閾値・縦スクロール分離・SP画面端保護、カード詳細・成果プレビュー・候補比較、5秒取消、あとで、6状態表示、PC 2カラム・ボタン/キーボード・44px操作域・視差軽減、`DecisionCardClient` ポート＋モック実装）                                             |         **必須**（合意済）         | `UX-01`〜`05`, `DEC-01`, `DEC-04`（Unit + Playwright SP 360/320px・PC）                                                           | **実装済** |
 |  **S6** (#14)   | Phase 2 | 状況画面（Bot別進捗・読み取り専用カンバン・待機/失敗理由・再試行ボタン）、履歴画面、初回設定・Bot接続管理（構造化 `budget_limit`・`is_paused`・スコープ変更・2段階失効・Worker Bearer発行）画面UI、および `DecisionCardClient` の `/api/human/*` 本接続                                                                       |              **必須**              | `UX-01`, `UX-02`, `BOT-03`（Playwright SP/PC）                                                                                    | 未着手     |
@@ -66,7 +66,7 @@ flowchart TD
 
 | 項目                                  | 現状                   | 扱い・解決タイミング                                                                                                   |
 | ------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| GitHub Issues 設定                    | 有効（`enabled`）      | 解決済（Milestone `MVP`・ロードマップ `#22`・`S0` / `S1` / `S2` / `S5` 完了済）                                        |
+| GitHub Issues 設定                    | 有効（`enabled`）      | 解決済（Milestone `MVP`・ロードマップ `#22`・`S0`〜`S3` / `S5` 完了済）                                                |
 | Muse の正式名称・URL                  | 未特定（`#19` 起票済） | MVP初期（`S0`〜`S8`）は ChatGPT (`#17`) / Claude (`#20`) / Grok (`#18`) を先行対象とし、特定後に接続スライスを追加     |
 | 最初の利用実例                        | 確定                   | 「アプリ企画・競合調査タスク分解 → 方針判断 → 調査成果提出」（`S4`・`S7`・`S8`・`#17`/`#18`/`#20` の共通検証シナリオ） |
 | 公式チャット接続 vs APIワーカー優先順 | 確定                   | Phase 1（`S2`〜`S4`）で共通MCP＋OAuth 2.1を整備し、Phase 3（`S7`・`#18`）で Cloudflare Queue + xAI API 自動再開を実装  |
