@@ -16,6 +16,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testIgnore: ["**/full-stack-mvp.spec.ts"],
   fullyParallel: true,
   forbidOnly: process.env["CI"] === "true",
   retries: process.env["CI"] === "true" ? 1 : 0,

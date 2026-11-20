@@ -234,12 +234,12 @@ flowchart LR
   P2 --> P3["Phase 3: 判断〜Bot再開の縦通し（S7〜S8）"]
 ```
 
-| 項目                                                          | 状況                                                                          | 次のアクション                         |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------- |
-| 企画・要件（[concept.md](concept.md)）                        | 実装基準（全6画面 UI・自律ワーカー 実装済）                                   | `S8` で全12件 AC を縦通し検証          |
-| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0〜S7 コード実装済）                                               | `S8` 縦通し E2E を実装                 |
-| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 実装基準（S1〜S3・S7 DB・Bot・Human API・5秒確定・Queue/DLQ/Cron 実装済）     | `S8` で全12件 AC 検証                  |
-| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 実装基準（S2 MCP・S3 Human API・S4 OAuth 2.1・S7 ワーカー/Grok コード実装済） | 検証環境デプロイ・実機実証は認証設定後 |
-| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0〜S7 コード実装済）                                               | 次は `S8` (#16)                        |
-| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）                                                      | 全変更に適用                           |
-| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`）                                                  | 稼働中                                 |
+| 項目                                                          | 状況                                                                                | 次のアクション                            |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------- |
+| 企画・要件（[concept.md](concept.md)）                        | 実装基準（全6画面 UI・自律ワーカー・全12件AC自動縦通しE2E 検証済）                  | 外部Bot実機実証（`#17`〜`#20`）           |
+| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0〜S8 コード・全12件AC自動縦通しE2E 実装済）                             | 検証/本番環境デプロイ（`#13`・`#21`）     |
+| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 実装基準（S1〜S3・S7 DB・Bot・Human API・5秒確定・Queue/DLQ/Cron・S8縦通し 検証済） | 本番運用監視・マイグレーション適用        |
+| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 実装基準（S2 MCP・S3 Human API・S4 OAuth 2.1・S7 ワーカー/Grok コード実装済）       | 検証環境デプロイ・実機実証は認証設定後    |
+| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0〜S8 コード・全12件AC自動縦通しE2E 実装済）                             | 認証情報設定後 `#13`・`#17`〜`#21` を実施 |
+| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）                                                            | 全変更に適用                              |
+| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`：`test:e2e`＋`test:e2e:fullstack` 稼働中）               | 稼働中                                    |
