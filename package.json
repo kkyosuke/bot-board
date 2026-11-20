@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "build:worker": "bun build src/worker/index.ts --outdir dist/worker --target browser --format esm",
+    "build:infra": "bun build infra/index.ts --outfile dist/infra/index.mjs --target node --format esm --external @pulumi/pulumi --external @pulumi/cloudflare",
+    "build:worker": "bun run infra/build-worker.ts",
     "check": "bun check",
     "check:guardrails": "bun run scripts/check-guardrails.ts",
+    "db:migrate:remote": "bun run infra/migrate-d1.ts",
+    "deploy": "bun run infra/deploy.ts",
     "dev": "vite",
     "dev:full": "bun run build && bun run tests/e2e/support/fullstack-server.ts",
     "fmt": "bun fmt",
@@ -16,10 +19,11 @@
     "lint": "bun lint",
     "prepare": "git config core.hooksPath .githooks || true",
     "preview": "vite preview",
+    "smoke": "bun run infra/smoke.ts",
     "test": "bun test",
     "test:e2e": "bunx playwright test",
     "test:e2e:fullstack": "bun run build && bunx playwright test --config playwright.fullstack.config.ts",
-    "verify": "bun fmt --check && bun lint && bun check && bun run check:guardrails && bun test && bun run build && bun run build:worker && bun run infra:preview"
+    "verify": "bun fmt --check && bun lint && bun check && bun run check:guardrails && bun test && bun run build && bun run build:worker && bun run build:infra && bun run infra:preview"
   },
   "dependencies": {
     "@better-auth/mcp": "^1.7.27",

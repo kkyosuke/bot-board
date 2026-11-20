@@ -19,6 +19,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Node.js 22 for Pulumi IaC check
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Install pinned Bun toolchain
         run: |
           npm install -g --prefix "$HOME/.local" --allow-scripts=bun "bun@${BUN_NPM_VERSION}"
@@ -40,6 +44,8 @@ jobs:
         run: bun run build
       - name: Build Cloudflare Worker bundle
         run: bun run build:worker
+      - name: Build Pulumi IaC Node.js entrypoint
+        run: bun run build:infra
       - name: Validate Pulumi Cloudflare IaC
         run: bun run infra:preview
       - name: Install Playwright Chromium

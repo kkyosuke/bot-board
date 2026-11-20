@@ -63,12 +63,39 @@ export function didParentMutationApply(parentChanges: number): GuardedMutationOu
 
 export const BATCH_GUARD_SQL = "INSERT INTO _batch_guard (ok) SELECT 0 WHERE changes() != ?";
 
-export function isBatchGuardAbortError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
+/**
+ * Walks an Error and its nested `.cause` chain (bounded to maxDepth) so Cloudflare D1 / Drizzle
+ * wrapped SQLite constraint errors are matched reliably.
+ */
+export function collectErrorMessages(error: unknown, maxDepth = 5): readonly string[] {
+  const messages: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth <= maxDepth && current !== null && current !== undefined; depth += 1) {
+    if (current instanceof Error) {
+      messages.push(current.message);
+      current = current.cause;
+      continue;
+    }
+    if (typeof current === "object" && "message" in current) {
+      const msgVal: unknown = Reflect.get(current, "message");
+      if (typeof msgVal === "string") {
+        messages.push(msgVal);
+      }
+      current = Reflect.get(current, "cause");
+      continue;
+    }
+    if (typeof current === "string") {
+      messages.push(current);
+    }
+    break;
   }
-  const msg = error.message;
-  return msg.includes("CHECK constraint failed") && msg.includes("chk_batch_guard_ok");
+  return messages;
+}
+
+export function isBatchGuardAbortError(error: unknown): boolean {
+  return collectErrorMessages(error).some(
+    (msg) => msg.includes("CHECK constraint failed") && msg.includes("chk_batch_guard_ok"),
+  );
 }
 
 function stripLeadingSqlComments(rawSql: string): string {

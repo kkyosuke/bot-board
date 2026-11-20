@@ -3,8 +3,9 @@ config:
   bot-board:rateLimitNamespaceId: "1002"
   bot-board:rateLimitRequests: "60"
   bot-board:rateLimitPeriodSeconds: "60"
-  bot-board:workerCpuMsLimit: "50"
-  # Required before `pulumi up` (set via `pulumi config set --secret`):
+  bot-board:workerCpuMsLimit: "10000"
+  bot-board:enableWorkersDev: "false"
+  # Required before `pulumi up` (set via `pulumi config set` / `--secret`):
   # - cloudflare:apiToken (or CLOUDFLARE_API_TOKEN env var)
   # - bot-board:accountId
   # - bot-board:zoneId
@@ -16,3 +17,6 @@ config:
   # - bot-board:githubClientId (--secret)
   # - bot-board:githubClientSecret (--secret)
   # - bot-board:xaiApiKey (--secret)
+  # Optional:
+  # - bot-board:xaiModel (default: grok-3-mini)
+  # - bot-board:xaiApiUrl (default: https://api.x.ai/v1/chat/completions)

@@ -716,6 +716,8 @@ export async function handleBotWorkTask(
       leaseRemainingMs,
     });
   } catch (error) {
+    // M4: Recompute wall-clock timestamp after slow model calls so lease/audit checks reflect real post-LLM time
+    const postErrorNowMs = input.nowMs ?? Date.now();
     if (error instanceof ModelAdapterError) {
       if (error.kind === "retryable") {
         await releaseWorkerLeaseOnRetry({
@@ -728,7 +730,7 @@ export async function handleBotWorkTask(
           preClaimVersion,
           ...(input.decisionId !== undefined ? { decisionId: input.decisionId } : {}),
           reason: `Transient model failure (${error.reasonCode}): ${error.message}`,
-          nowMs,
+          nowMs: postErrorNowMs,
         });
         return {
           outcome: "retry",
@@ -748,7 +750,7 @@ export async function handleBotWorkTask(
         adapterName: input.adapter.name,
         estimatedCostCents: 0,
         reason: `${error.reasonCode}: ${error.message}`,
-        nowMs,
+        nowMs: postErrorNowMs,
       });
     }
 
@@ -766,7 +768,7 @@ export async function handleBotWorkTask(
       preClaimVersion,
       ...(input.decisionId !== undefined ? { decisionId: input.decisionId } : {}),
       reason: "Unexpected transient worker failure; scheduled retry",
-      nowMs,
+      nowMs: postErrorNowMs,
     });
     return {
       outcome: "retry",
@@ -774,6 +776,9 @@ export async function handleBotWorkTask(
       reason: "Unexpected transient worker failure.",
     };
   }
+
+  // M4: Refresh timestamp post-LLM so lease checks, proposal TTLs, and audit events reflect actual completion time
+  const postStepNowMs = input.nowMs ?? Date.now();
 
   // B1: Unified post-claim mutation guard so ZERO Bot service errors can ever leak a WorkLease
   const runPostClaimMutation = async (
@@ -790,7 +795,7 @@ export async function handleBotWorkTask(
         actionKind,
         adapterName: input.adapter.name,
         estimatedCostCents: stepOutput.estimated_cost_cents,
-        nowMs,
+        nowMs: postStepNowMs,
       });
       return outcome;
     } catch (err) {
@@ -806,7 +811,7 @@ export async function handleBotWorkTask(
           adapterName: input.adapter.name,
           estimatedCostCents: stepOutput.estimated_cost_cents,
           reason: `${err.code}: ${err.message}`,
-          nowMs,
+          nowMs: postStepNowMs,
         });
       }
 
@@ -822,7 +827,7 @@ export async function handleBotWorkTask(
         preClaimVersion,
         ...(input.decisionId !== undefined ? { decisionId: input.decisionId } : {}),
         reason: retryReason,
-        nowMs,
+        nowMs: postStepNowMs,
       });
       await recordWorkerStepExecutedEvent(db, {
         workspaceId: ctx.workspaceId,
@@ -832,7 +837,7 @@ export async function handleBotWorkTask(
         actionKind: `${actionKind}:retry`,
         adapterName: input.adapter.name,
         estimatedCostCents: stepOutput.estimated_cost_cents,
-        nowMs,
+        nowMs: postStepNowMs,
       });
       return {
         outcome: "retry",
@@ -860,9 +865,15 @@ export async function handleBotWorkTask(
             status: "blocked",
             status_reason: capMessage,
           },
-          nowMs,
+          postStepNowMs,
         );
-        await markDecisionConsumedScoped(db, ctx.workspaceId, task.id, input.decisionId, nowMs);
+        await markDecisionConsumedScoped(
+          db,
+          ctx.workspaceId,
+          task.id,
+          input.decisionId,
+          postStepNowMs,
+        );
         await db.orm.insert(schema.events).values({
           id: generateEntityId("evt"),
           workspaceId: ctx.workspaceId,
@@ -878,7 +889,7 @@ export async function handleBotWorkTask(
             limit: budgetEval.limit,
           }),
           requestId: null,
-          createdAt: nowMs,
+          createdAt: postStepNowMs,
         });
         return { outcome: "budget_blocked", reason: capMessage };
       });
@@ -899,9 +910,15 @@ export async function handleBotWorkTask(
           ...(stepOutput.artifact !== undefined ? { artifact: stepOutput.artifact } : {}),
           proposals: stepOutput.proposals,
         },
-        nowMs,
+        postStepNowMs,
       );
-      await markDecisionConsumedScoped(db, ctx.workspaceId, task.id, input.decisionId, nowMs);
+      await markDecisionConsumedScoped(
+        db,
+        ctx.workspaceId,
+        task.id,
+        input.decisionId,
+        postStepNowMs,
+      );
       return { outcome: "completed", action: "submit_proposal" };
     });
   }
@@ -920,7 +937,7 @@ export async function handleBotWorkTask(
         estimatedCostCents: stepOutput.estimated_cost_cents,
         reason:
           "APPROVAL_REQUIRED: Model attempted direct record_result(success) on requires_approval=true task.",
-        nowMs,
+        nowMs: postStepNowMs,
       });
     }
 
@@ -941,9 +958,15 @@ export async function handleBotWorkTask(
           ...(input.decisionId !== undefined ? { decision_id: input.decisionId } : {}),
           ...(stepOutput.artifact !== undefined ? { artifact: stepOutput.artifact } : {}),
         },
-        nowMs,
+        postStepNowMs,
       );
-      await markDecisionConsumedScoped(db, ctx.workspaceId, task.id, input.decisionId, nowMs);
+      await markDecisionConsumedScoped(
+        db,
+        ctx.workspaceId,
+        task.id,
+        input.decisionId,
+        postStepNowMs,
+      );
       return { outcome: "completed", action: "record_result" };
     });
   }
@@ -960,13 +983,14 @@ export async function handleBotWorkTask(
           db,
           ctx,
           {
-            request_id: `worker-sub-${task.id}-v${claimed.version}-${idx}-${generateEntityId("req")}`,
+            // Minor 2: Deterministic request_id prevents duplicate subtasks if update_task retries mid-step
+            request_id: `worker-sub-${task.id}-v${claimed.version}-${idx}`,
             title: sub.title,
             description: sub.description,
             parent_task_id: task.id,
             requires_approval: sub.requires_approval,
           },
-          nowMs,
+          postStepNowMs,
         );
       }
     }
@@ -986,9 +1010,9 @@ export async function handleBotWorkTask(
           : {}),
         ...(stepOutput.artifact !== undefined ? { artifact: stepOutput.artifact } : {}),
       },
-      nowMs,
+      postStepNowMs,
     );
-    await markDecisionConsumedScoped(db, ctx.workspaceId, task.id, input.decisionId, nowMs);
+    await markDecisionConsumedScoped(db, ctx.workspaceId, task.id, input.decisionId, postStepNowMs);
     return { outcome: "completed", action: "update_task" };
   });
 }

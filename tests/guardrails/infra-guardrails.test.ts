@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
-describe("Pulumi Cloudflare infrastructure guardrails (S1)", () => {
-  test("infra/ defines Pulumi Bun runtime and all required Cloudflare resources & ASSETS binding (M6)", () => {
+describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deploy Readiness)", () => {
+  test("infra/ defines valid Pulumi Node.js + Bun package manager runtime, hardened Cloudflare resources, and zero Bun-only import.meta.dir (B1, B2, M2)", () => {
     const pulumiYamlPath = join(REPO_ROOT, "infra", "Pulumi.yaml");
     const infraIndexPath = join(REPO_ROOT, "infra", "index.ts");
 
@@ -13,14 +13,26 @@ describe("Pulumi Cloudflare infrastructure guardrails (S1)", () => {
     expect(existsSync(infraIndexPath)).toBe(true);
 
     const pulumiYaml = readFileSync(pulumiYamlPath, "utf8");
-    expect(pulumiYaml).toContain("runtime: bun");
+    expect(pulumiYaml).toContain("name: nodejs");
+    expect(pulumiYaml).toContain("packagemanager: bun");
+    expect(pulumiYaml).toContain("typescript: false");
+    expect(pulumiYaml).toContain("main: ../dist/infra/index.mjs");
+    expect(pulumiYaml).not.toMatch(/^\s*runtime:\s*bun\s*$/m);
 
     const infraIndex = readFileSync(infraIndexPath, "utf8");
+    expect(infraIndex).not.toContain("import.meta.dir.");
+    expect(infraIndex).not.toMatch(/import\.meta\.dir\b/);
+    expect(infraIndex).toContain("import.meta.dirname");
+
     expect(infraIndex).toContain("cloudflare.D1Database");
+    expect(infraIndex).toContain("protect: isProd");
     expect(infraIndex).toContain("cloudflare.WorkersScript");
+    expect(infraIndex).toContain("observability:");
     expect(infraIndex).toContain("cloudflare.Queue(");
     expect(infraIndex).toContain("cloudflare.QueueConsumer");
+    expect(infraIndex).toContain("maxConcurrency:");
     expect(infraIndex).toContain("cloudflare.WorkersCronTrigger");
+    expect(infraIndex).toContain("cloudflare.WorkersScriptSubdomain");
     expect(infraIndex).toContain("cloudflare.WorkersCustomDomain");
     expect(infraIndex).toContain("cloudflare.WorkersRoute");
     expect(infraIndex).toContain('type: "assets"');
@@ -28,13 +40,22 @@ describe("Pulumi Cloudflare infrastructure guardrails (S1)", () => {
     expect(infraIndex).toContain("assertClientAssetsExist");
     expect(infraIndex).toContain('notFoundHandling: "single-page-application"');
     expect(infraIndex).toContain('runWorkerFirst: ["/api/*", "/.well-known/*"]');
+    expect(infraIndex).toContain("headers: STATIC_ASSETS_HEADERS");
+    expect(infraIndex).toContain("X-Frame-Options: DENY");
+    expect(infraIndex).toContain("frame-ancestors 'none'");
+    expect(infraIndex).toContain("X-Content-Type-Options: nosniff");
     expect(infraIndex).toContain('type: "ratelimit"');
     expect(infraIndex).toContain("rateLimitNamespaceId");
+    expect(infraIndex).toContain("RATE_LIMIT_PERIOD_SECONDS");
+    expect(infraIndex).toContain("XAI_MODEL");
+    expect(infraIndex).toContain("XAI_API_URL");
     expect(infraIndex).toContain("deliveryDelay: 5");
     expect(infraIndex).toContain("deadLetterQueue:");
+    expect(infraIndex).toContain("export const d1DatabaseUuid");
+    expect(infraIndex).toContain("export const publicUrl");
   });
 
-  test("Pulumi stack configs isolate rateLimitNamespaceId per environment and contain zero inline plaintext secrets (M6, Minor 5)", () => {
+  test("Pulumi stack configs isolate rateLimitNamespaceId, enforce safe workerCpuMsLimit (5000..300000ms), and contain zero inline plaintext secrets (B2, M2)", () => {
     const namespaceIds = new Set<string>();
     const secretKeys = [
       "betterAuthSecret",
@@ -67,11 +88,52 @@ describe("Pulumi Cloudflare infrastructure guardrails (S1)", () => {
         }
       }
 
+      const cpuLine = activeLines.find((line) => line.includes("workerCpuMsLimit:"));
+      expect(cpuLine).toBeDefined();
+      if (cpuLine !== undefined) {
+        const cpuMs = Number(
+          cpuLine
+            .split("workerCpuMsLimit:")[1]
+            ?.trim()
+            .replace(/^["']|["']$/g, ""),
+        );
+        expect(Number.isInteger(cpuMs)).toBe(true);
+        expect(cpuMs).toBeGreaterThanOrEqual(5000);
+        expect(cpuMs).toBeLessThanOrEqual(300_000);
+      }
+
       for (const line of activeLines) {
         expect(line).not.toMatch(secretInlineValuePattern);
       }
     }
 
     expect(namespaceIds.size).toBe(2);
+  });
+
+  test("Cloudflare Worker bundle builds cleanly with workerd conditions, zero bun:/require()/AsyncLocalStoragePolyfill, and stays within size budget (M1)", async () => {
+    const buildResult = await Bun.build({
+      entrypoints: [join(REPO_ROOT, "src", "worker", "index.ts")],
+      target: "node",
+      conditions: ["workerd", "worker", "module", "browser"],
+      format: "esm",
+      minify: true,
+    });
+    expect(buildResult.success).toBe(true);
+    const artifact = buildResult.outputs[0];
+    expect(artifact).toBeDefined();
+    if (artifact === undefined) {
+      return;
+    }
+
+    const code = await artifact.text();
+    const rawBytes = new TextEncoder().encode(code);
+    const gzipBytes = Bun.gzipSync(rawBytes);
+
+    expect(code).not.toContain("bun:");
+    expect(code).not.toContain("AsyncLocalStoragePolyfill");
+    expect(code).not.toMatch(/\brequire\s*\(\s*["']/);
+    expect(code).toMatch(/export\s*\{[^}]*\bas\s+default\b|export\s+default\b/);
+    expect(rawBytes.byteLength).toBeLessThan(2_000_000);
+    expect(gzipBytes.byteLength).toBeLessThan(500_000);
   });
 });

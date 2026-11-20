@@ -2,7 +2,14 @@ import { and, asc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { z } from "zod";
 
 import { type OwnerContext } from "@/auth/context";
-import { type AppDatabase, guardedBatch, type RawSqlStatement, schema, type SqlParam } from "@/db";
+import {
+  type AppDatabase,
+  collectErrorMessages,
+  guardedBatch,
+  type RawSqlStatement,
+  schema,
+  type SqlParam,
+} from "@/db";
 import {
   type ArtifactPreview,
   assertCanDeferCard,
@@ -317,14 +324,11 @@ function extractSelectedOptionIdsFromPayload(payload: DecisionPayload): readonly
 }
 
 function isGroupAcceptUniqueViolation(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const msg = error.message;
-  return (
-    msg.includes("UNIQUE constraint failed") &&
-    (msg.includes("decision_cards.selection_group_id") ||
-      msg.includes("idx_decision_cards_single_group_accept"))
+  return collectErrorMessages(error).some(
+    (msg) =>
+      msg.includes("UNIQUE constraint failed") &&
+      (msg.includes("decision_cards.selection_group_id") ||
+        msg.includes("idx_decision_cards_single_group_accept")),
   );
 }
 
