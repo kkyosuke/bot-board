@@ -158,8 +158,10 @@ export function assertCanUndoCard(params: {
   readonly nowMs: number;
   readonly provisionalUntilMs: number | null;
 }): void {
-  assertExpectedVersion(params.expectedVersion, params.currentVersion, "DecisionCard");
+  assertPositiveIntegerVersion(params.expectedVersion, "DecisionCard");
+  // DEC-01: Finalize increments card.version; reject finalized cards with INVALID_TRANSITION before VERSION_CONFLICT
   assertDecisionCardNotFinalized(params.cardStatus);
+  assertExpectedVersion(params.expectedVersion, params.currentVersion, "DecisionCard");
 
   if (params.cardStatus !== "provisional") {
     throw new DomainError(

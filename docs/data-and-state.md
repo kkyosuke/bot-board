@@ -1,6 +1,6 @@
 # データモデル・状態遷移・排他制御仕様
 
-作成日：2026-11-18 ／ 状態：実装基準（S1 DB・Domain遷移、S2 Botサービス・冪等・WorkLease 実装済 ／ S3 Human API・5秒確定 未着手）
+作成日：2026-11-18 ／ 状態：実装基準（S1 DB・Domain遷移、S2 Botサービス・冪等・WorkLease、S3 Human API・5秒確定 実装済 ／ S7 自律ワーカー・Cron 未着手）
 
 ## 1. エンティティ構成（Cloudflare D1 / Drizzle）
 
@@ -40,7 +40,7 @@ flowchart LR
 | `events`                                                                           | `id`                                                                                                                                        | `workspace_id`, `actor_type`, `actor_id`, `entity_type`, `entity_id`, `action`, `payload_json`, `request_id`, `created_at`                                                                                                                                                                                | 監査・履歴・失敗理由追跡用                                                                                                                                                     |
 | `idempotency_keys`                                                                 | `(workspace_id, actor_type, actor_id, operation, request_id)`                                                                               | `input_hash`, `response_json`, `created_at`                                                                                                                                                                                                                                                               | 再送時の二重実行防止（`DEC-02`）                                                                                                                                               |
 
-- 禁止：許可されたオーナー以外の自由サインアップを受け付けること（Better Auth `databaseHooks` 等で初期オーナー以外は拒否する）（強制: `S3予定`）
+- 禁止：許可されたオーナー以外の自由サインアップを受け付けること（Better Auth `databaseHooks` 等で初期オーナー以外は拒否する）（強制: `src/auth/better-auth.ts`, `src/auth/owner.ts`, `tests/integration/human-finalize.test.ts`）
 - 禁止：D1 `db.batch` 内で先行条件付き `UPDATE` が0件一致のときに無条件の後続SQLや Queue `send()` を通すこと（後続SQLは `_batch_guard` `CHECK (ok = 1)` により `changes() != 1` で即ロールバック保護し、`applied === true` 確認後にのみ Queue 投入する）（強制: `src/db/guarded-batch.ts`, `tests/unit/db/guarded-batch.test.ts`）
 - 禁止：`selection_mode`（`binary` / `single` / `multi`）の制約を満たさない判断ペイロード（候補外ID、複数選択の0件採用・重複・未分類項目）を受理すること（強制: `src/domain/decision-card.ts`, `tests/unit/domain/decision-card.test.ts`）
 
@@ -108,8 +108,8 @@ stateDiagram-v2
 ```
 
 - 遷移規則：`provisional` から `pending / superseded / closed / expired` へ移る場合は、親カードの更新成立（`changes() = 1`）を条件に同一 `db.batch` で `decisions(status='provisional')` を `status = 'canceled'`（`canceled_at` 記録）へ更新する。
-- 禁止：`provisional` 状態のカードを確定済み承認としてBot・Workerへ渡すこと（`DEC-01`）（強制: `src/domain/card-state.ts`, `tests/unit/domain/state-transitions.test.ts`, `S3予定`）
-- 禁止：確定後（`accepted` / `declined`）のカードを `undo` や `superseded` で書き換えること（変更希望・再確認は新規カードを作成する）（強制: `src/domain/card-state.ts`, `tests/unit/domain/state-transitions.test.ts`, `S3予定`）
+- 禁止：`provisional` 状態のカードを確定済み承認としてBot・Workerへ渡すこと（`DEC-01`）（強制: `src/domain/card-state.ts`, `src/services/system/finalize.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/human-finalize.test.ts`）
+- 禁止：確定後（`accepted` / `declined`）のカードを `undo` や `superseded` で書き換えること（変更希望・再確認は新規カードを作成する）（強制: `src/domain/card-state.ts`, `src/services/human/card-services.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/human-finalize.test.ts`）
 
 ---
 
