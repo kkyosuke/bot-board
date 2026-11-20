@@ -20,6 +20,7 @@ import {
   deferHumanCardInputSchema,
   listHumanCardsQuerySchema,
   listHumanHistoryQuerySchema,
+  oauthConsentContextQuerySchema,
   retryHumanTaskInputSchema,
   undoHumanCardInputSchema,
   updateHumanBotInputSchema,
@@ -252,6 +253,22 @@ export function mountHumanRoutes(app: Hono, options: MountHumanRoutesOptions): v
     const botId = ctx.req.param("id");
     const body = updateHumanBotInputSchema.parse(await readJsonBody(ctx));
     const result = await options.port.updateBot(authResult.owner, botId, body);
+    return ctx.json(result, 200);
+  });
+
+  // 14. GET /api/human/oauth/consent-context
+  app.get("/api/human/oauth/consent-context", async (ctx) => {
+    const authResult = await requireOwner(ctx, false);
+    if ("earlyResponse" in authResult) {
+      return authResult.earlyResponse;
+    }
+    const clientIdParam = ctx.req.query("client_id") ?? "";
+    const scopeParam = ctx.req.query("scope");
+    const parsedQuery = oauthConsentContextQuerySchema.parse({
+      client_id: clientIdParam,
+      ...(scopeParam !== undefined ? { scope: scopeParam } : {}),
+    });
+    const result = await options.port.getOAuthConsentContext(authResult.owner, parsedQuery);
     return ctx.json(result, 200);
   });
 }

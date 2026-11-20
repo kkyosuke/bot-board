@@ -50,7 +50,7 @@ export async function handleWorkerHttpRequest(
         baseUrl: explicitBaseUrl,
         secret: config.betterAuthSecret,
         trustedOrigins,
-        enableMcpOAuth: config.enableMcpOAuth ?? false,
+        enableMcpOAuth: config.enableMcpOAuth ?? true,
         ...(config.githubClientId !== undefined ? { githubClientId: config.githubClientId } : {}),
         ...(config.githubClientSecret !== undefined
           ? { githubClientSecret: config.githubClientSecret }

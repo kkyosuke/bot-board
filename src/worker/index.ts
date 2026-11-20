@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 
 import { assertModelTimeoutWithinLease, type BoundedModelStepOptions } from "@/adapters";
+import { createLazyOAuthJwtVerifierFromD1 } from "@/auth/better-auth";
 import {
   type D1BotVerificationInput,
   type VerifiedBotContext,
@@ -169,7 +170,28 @@ const workerHandler = {
           : undefined;
       return await handleWorkerHttpRequest(request, {
         db: env.DB,
-        getMcpPort: () => createMcpBotServicePort(createD1Database(env.DB)),
+        getMcpPort: () => {
+          const db = createD1Database(env.DB);
+          const betterAuthUrl = env.BETTER_AUTH_URL?.trim() ?? "";
+          const betterAuthSecret = env.BETTER_AUTH_SECRET?.trim() ?? "";
+          const verifyOAuthJwt =
+            betterAuthUrl !== "" && betterAuthSecret.length >= 16
+              ? createLazyOAuthJwtVerifierFromD1(db, {
+                  baseUrl: betterAuthUrl,
+                  secret: betterAuthSecret,
+                  ...(env.TRUSTED_ORIGINS !== undefined
+                    ? { trustedOrigins: env.TRUSTED_ORIGINS }
+                    : {}),
+                  ...(env.OWNER_GITHUB_ID !== undefined
+                    ? { ownerGithubId: env.OWNER_GITHUB_ID }
+                    : {}),
+                  enableMcpOAuth: true,
+                })
+              : undefined;
+          return createMcpBotServicePort(db, {
+            ...(verifyOAuthJwt !== undefined ? { verifyOAuthJwt } : {}),
+          });
+        },
         finalizeQueue: env.DECISION_FINALIZE_QUEUE,
         botWorkQueue: env.BOT_WORK_QUEUE,
         waitUntil: (promise) => {

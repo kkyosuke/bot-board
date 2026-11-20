@@ -18,6 +18,14 @@ export {
   type MockDecisionClientOptions,
 } from "./api/mock-decision-client";
 
+export {
+  type AppRoute,
+  buildSignInRedirectPath,
+  isSafeRedirectUrl,
+  normalizeSafeNextPath,
+  parseAppRoute,
+} from "./router";
+
 export const CLIENT_ROUTES = [
   "/",
   "/board",

@@ -143,6 +143,13 @@ export const updateHumanBotInputSchema = z
     { message: "At least one bot field must be provided for update." },
   );
 
+export const oauthConsentContextQuerySchema = z
+  .object({
+    client_id: z.string().trim().min(1).max(256),
+    scope: z.string().max(1024).optional(),
+  })
+  .strict();
+
 export type ListHumanCardsQuery = z.infer<typeof listHumanCardsQuerySchema>;
 export type DecideHumanCardInput = z.infer<typeof decideHumanCardInputSchema>;
 export type UndoHumanCardInput = z.infer<typeof undoHumanCardInputSchema>;
@@ -152,3 +159,4 @@ export type ListHumanHistoryQuery = z.infer<typeof listHumanHistoryQuerySchema>;
 export type UpdateHumanWorkspaceInput = z.infer<typeof updateHumanWorkspaceInputSchema>;
 export type CreateWorkerBotInput = z.infer<typeof createWorkerBotInputSchema>;
 export type UpdateHumanBotInput = z.infer<typeof updateHumanBotInputSchema>;
+export type OAuthConsentContextQuery = z.infer<typeof oauthConsentContextQuerySchema>;
