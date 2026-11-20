@@ -1,6 +1,6 @@
 # データモデル・状態遷移・排他制御仕様
 
-作成日：2026-11-18 ／ 状態：実装基準（S1 DB・Domain遷移、S2 Botサービス・冪等・WorkLease、S3 Human API・5秒確定 実装済 ／ S7 自律ワーカー・Cron 未着手）
+作成日：2026-11-18 ／ 状態：実装基準（S1 DB・Domain遷移、S2 Botサービス・冪等・WorkLease、S3 Human API・5秒確定、S7 自律ワーカー・Cron 4責務・DLQ 実装済）
 
 ## 1. エンティティ構成（Cloudflare D1 / Drizzle）
 
@@ -80,8 +80,8 @@ stateDiagram-v2
 | `waiting_human → ready / blocked` | System（確定/失効時） | ① `policy` / `choice` の `accepted` 確定（`ready`）、② 単一またはグループ内**全候補**の `declined` 確定（`on_decline_policy = revise` は `ready`、`block` は `blocked`。未決候補が残る間は `waiting_human` 維持）、③ 有効カードが全て `expired` / 後継なし `superseded` となった場合（`ready`） |
 | `blocked / failed → ready`        | Human / Bot           | Human API `POST /api/human/tasks/:id/retry`、またはBotによる前提タスク解消                                                                                                                                                                                                                      |
 
-- 禁止：`requires_approval = true` のタスクを `submit_proposal(deliverable)` の採用確定なしに `done` へ遷移させること（強制: `src/domain/task-state.ts`, `tests/unit/domain/state-transitions.test.ts`）
-- 禁止：見送り（`declined`）や作業失敗（`failed`）を `done` として扱うこと（`BOT-03`）（強制: `src/domain/task-state.ts`, `tests/unit/domain/state-transitions.test.ts`）
+- 禁止：`requires_approval = true` のタスクを `submit_proposal(deliverable)` の採用確定なしに `done` へ遷移させること（強制: `src/domain/task-state.ts`, `src/services/system/worker-step.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/worker-cron-adapters.test.ts`）
+- 禁止：見送り（`declined`）や作業失敗（`failed`）を `done` として扱うこと（`BOT-03`）（強制: `src/domain/task-state.ts`, `src/services/system/worker-step.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/worker-cron-adapters.test.ts`）
 
 ---
 
@@ -108,8 +108,8 @@ stateDiagram-v2
 ```
 
 - 遷移規則：`provisional` から `pending / superseded / closed / expired` へ移る場合は、親カードの更新成立（`changes() = 1`）を条件に同一 `db.batch` で `decisions(status='provisional')` を `status = 'canceled'`（`canceled_at` 記録）へ更新する。
-- 禁止：`provisional` 状態のカードを確定済み承認としてBot・Workerへ渡すこと（`DEC-01`）（強制: `src/domain/card-state.ts`, `src/services/system/finalize.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/human-finalize.test.ts`）
-- 禁止：確定後（`accepted` / `declined`）のカードを `undo` や `superseded` で書き換えること（変更希望・再確認は新規カードを作成する）（強制: `src/domain/card-state.ts`, `src/services/human/card-services.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/human-finalize.test.ts`）
+- 禁止：`provisional` 状態のカードを確定済み承認としてBot・Workerへ渡すこと（`DEC-01`）（強制: `src/domain/card-state.ts`, `src/services/system/finalize.ts`, `src/services/system/worker-step.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/human-finalize.test.ts`, `tests/integration/worker-cron-adapters.test.ts`）
+- 禁止：確定後（`accepted` / `declined`）のカードを `undo` や `superseded` で書き換えること（変更希望・再確認は新規カードを作成する）（強制: `src/domain/card-state.ts`, `src/services/human/card-services.ts`, `src/services/system/worker-step.ts`, `tests/unit/domain/state-transitions.test.ts`, `tests/integration/human-finalize.test.ts`, `tests/integration/worker-cron-adapters.test.ts`）
 
 ---
 
