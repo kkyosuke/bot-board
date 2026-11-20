@@ -1,6 +1,6 @@
 # データモデル・状態遷移・排他制御仕様
 
-作成日：2026-11-18 ／ 状態：実装基準（S1 DBスキーマ・マイグレーション・`guardedBatch`・Domain純粋状態遷移 実装済 ／ S2・S3 API/Service 未着手）
+作成日：2026-11-18 ／ 状態：実装基準（S1 DB・Domain遷移、S2 Botサービス・冪等・WorkLease 実装済 ／ S3 Human API・5秒確定 未着手）
 
 ## 1. エンティティ構成（Cloudflare D1 / Drizzle）
 

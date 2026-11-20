@@ -1,39 +1,61 @@
-import { type VerifiedBotContext } from "@/auth/context";
-import { didParentMutationApply, type GuardedMutationOutcome } from "@/db";
-import { type BotScope, DomainError } from "@/domain";
-
-export function assertBotReadScope(
-  ctx: VerifiedBotContext,
-  targetWorkspaceId: string,
-  requiredScope: BotScope,
-): void {
-  if (ctx.workspaceId !== targetWorkspaceId) {
-    throw new DomainError("NOT_AUTHORIZED", "Cross-workspace access denied.", false);
-  }
-  if (!ctx.effectiveScopes.has(requiredScope)) {
-    throw new DomainError("NOT_AUTHORIZED", `Missing required scope: ${requiredScope}.`, false);
-  }
-}
-
-export function assertBotWriteAccess(
-  ctx: VerifiedBotContext,
-  targetWorkspaceId: string,
-  requiredScope: BotScope,
-): void {
-  assertBotReadScope(ctx, targetWorkspaceId, requiredScope);
-
-  if (ctx.isWorkspacePaused) {
-    throw new DomainError("WORKSPACE_PAUSED", "Workspace is currently paused.", true);
-  }
-  if (ctx.status === "paused") {
-    throw new DomainError(
-      "NOT_AUTHORIZED",
-      "Bot connection is paused for write operations.",
-      false,
-    );
-  }
-}
-
-export function verifyBotMutationOutcome(parentChanges: number): GuardedMutationOutcome {
-  return didParentMutationApply(parentChanges);
-}
+export { assertBotReadScope, assertBotWriteAccess, verifyBotMutationOutcome } from "./guards";
+export {
+  type ArtifactDetailDto,
+  type ArtifactSummaryDto,
+  type FinalizedDecisionResultDto,
+  getArtifact,
+  getTask,
+  getWorkspaceContext,
+  listDecisionResults,
+  listTasks,
+  type TaskDetailDto,
+  type TaskSummaryDto,
+  type WorkspaceContextDto,
+} from "./read-services";
+export {
+  type ArtifactUpsertInput,
+  artifactUpsertSchema,
+  type ClaimTaskInput,
+  claimTaskInputSchema,
+  type CreateTaskInput,
+  createTaskInputSchema,
+  decisionFactorSchema,
+  decisionOptionSchema,
+  type GetArtifactInput,
+  getArtifactInputSchema,
+  type GetTaskInput,
+  getTaskInputSchema,
+  getWorkspaceContextInputSchema,
+  type ListDecisionResultsInput,
+  listDecisionResultsInputSchema,
+  type ListTasksInput,
+  listTasksInputSchema,
+  type ProposalItemInput,
+  proposalItemInputSchema,
+  type RecordResultInput,
+  recordResultInputSchema,
+  type RenewLeaseInput,
+  renewLeaseInputSchema,
+  type SubmitProposalInput,
+  submitProposalInputSchema,
+  type SupersedeProposalInput,
+  supersedeProposalInputSchema,
+  type UpdateTaskInput,
+  updateTaskInputSchema,
+} from "./schemas";
+export {
+  claimTask,
+  type ClaimTaskResult,
+  createTask,
+  type CreateTaskResult,
+  recordResult,
+  type RecordResultOutput,
+  renewLease,
+  type RenewLeaseResult,
+  submitProposal,
+  type SubmitProposalResult,
+  supersedeProposal,
+  type SupersedeProposalResult,
+  updateTask,
+  type UpdateTaskResult,
+} from "./write-services";
