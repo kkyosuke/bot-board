@@ -547,6 +547,17 @@ export async function finalizeDecisionCard(
             params: [nowMs, card.workspaceId, card.selectionGroupId, card.id],
           },
           {
+            sql: `UPDATE decisions
+                  SET consumed_at = COALESCE(consumed_at, ?)
+                  WHERE status = 'finalized'
+                    AND consumed_at IS NULL
+                    AND card_id IN (
+                      SELECT id FROM decision_cards
+                      WHERE workspace_id = ? AND selection_group_id = ? AND id != ?
+                    )`,
+            params: [nowMs, card.workspaceId, card.selectionGroupId, card.id],
+          },
+          {
             sql: `UPDATE decision_cards
                   SET status = 'closed', provisional_result = NULL, provisional_until = NULL, version = version + 1, updated_at = ?
                   WHERE workspace_id = ? AND selection_group_id = ? AND id != ? AND status IN ('pending', 'deferred', 'provisional')`,
@@ -647,26 +658,52 @@ export async function finalizeDecisionCard(
         ],
       });
     } else {
-      followUps.push({
-        sql: `UPDATE tasks
-              SET status = ?, status_reason = ?, version = version + 1, updated_at = ?
-              WHERE id = ? AND workspace_id = ? AND status = 'waiting_human' AND version = ?
-                AND NOT EXISTS (
-                  SELECT 1 FROM decision_cards
-                  WHERE workspace_id = ? AND selection_group_id = ?
-                    AND status IN ('pending', 'deferred', 'provisional', 'accepted')
-                )`,
-        params: [
-          allDeclinedTaskStatus,
-          declineReason,
-          nowMs,
-          task.id,
-          card.workspaceId,
-          task.version,
-          card.workspaceId,
-          card.selectionGroupId,
-        ],
-      });
+      followUps.push(
+        {
+          sql: `UPDATE tasks
+                SET status = ?, status_reason = ?, version = version + 1, updated_at = ?
+                WHERE id = ? AND workspace_id = ? AND status = 'waiting_human' AND version = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM decision_cards
+                    WHERE workspace_id = ? AND selection_group_id = ?
+                      AND status IN ('pending', 'deferred', 'provisional', 'accepted')
+                  )`,
+          params: [
+            allDeclinedTaskStatus,
+            declineReason,
+            nowMs,
+            task.id,
+            card.workspaceId,
+            task.version,
+            card.workspaceId,
+            card.selectionGroupId,
+          ],
+        },
+        {
+          // When all candidates in the group are now declined, supersede prior intermediate declined decisions
+          sql: `UPDATE decisions
+                SET consumed_at = COALESCE(consumed_at, ?)
+                WHERE status = 'finalized'
+                  AND consumed_at IS NULL
+                  AND card_id IN (
+                    SELECT id FROM decision_cards
+                    WHERE workspace_id = ? AND selection_group_id = ? AND id != ?
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM decision_cards
+                    WHERE workspace_id = ? AND selection_group_id = ?
+                      AND status IN ('pending', 'deferred', 'provisional', 'accepted')
+                  )`,
+          params: [
+            nowMs,
+            card.workspaceId,
+            card.selectionGroupId,
+            card.id,
+            card.workspaceId,
+            card.selectionGroupId,
+          ],
+        },
+      );
     }
 
     followUps.push(

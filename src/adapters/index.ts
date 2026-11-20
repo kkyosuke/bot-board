@@ -1,23 +1,27 @@
-import { DomainError } from "@/domain";
-
-export interface BoundedModelStepOptions {
-  readonly timeoutMs: number;
-  readonly leaseRemainingMs: number;
-}
-
-export function assertModelTimeoutWithinLease(options: BoundedModelStepOptions): void {
-  if (options.timeoutMs <= 0 || options.leaseRemainingMs <= 0) {
-    throw new DomainError(
-      "VALIDATION_ERROR",
-      "Timeout and lease duration must be positive.",
-      false,
-    );
-  }
-  if (options.timeoutMs >= options.leaseRemainingMs) {
-    throw new DomainError(
-      "LEASE_CONFLICT",
-      "Model step timeout must be strictly shorter than remaining WorkLease TTL.",
-      true,
-    );
-  }
-}
+export {
+  createGrokModelAdapter,
+  DEFAULT_GROK_MODEL,
+  DEFAULT_XAI_CHAT_COMPLETIONS_URL,
+  type GrokAdapterConfig,
+} from "./grok";
+export {
+  createLocalScenarioModelAdapter,
+  createScriptedModelAdapter,
+  type ScriptedStepHandler,
+} from "./mock";
+export {
+  assertModelTimeoutWithinLease,
+  type BoundedModelStepOptions,
+  classifyHttpAdapterFailure,
+  type ModelAdapter,
+  ModelAdapterError,
+  type ModelAdapterErrorCode,
+  type ModelAdapterErrorKind,
+  type ModelAdapterErrorOptions,
+  type ModelStepArtifactSummary,
+  type ModelStepContext,
+  type ModelStepOutput,
+  modelStepOutputSchema,
+  type ModelStepTriggerDecision,
+  parseRetryAfterHeader,
+} from "./types";

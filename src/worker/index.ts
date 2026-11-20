@@ -6,16 +6,23 @@ import {
   type RateLimit,
   type ScheduledController,
 } from "@cloudflare/workers-types";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { assertModelTimeoutWithinLease, type BoundedModelStepOptions } from "@/adapters";
+import {
+  assertModelTimeoutWithinLease,
+  type BoundedModelStepOptions,
+  createGrokModelAdapter,
+  type ModelAdapter,
+} from "@/adapters";
 import { createLazyOAuthJwtVerifierFromD1 } from "@/auth/better-auth";
 import {
   type D1BotVerificationInput,
+  parseBotScopes,
   type VerifiedBotContext,
   verifyBotConnectionContext,
 } from "@/auth/bot";
-import { createD1Database, type D1LikeDatabase } from "@/db";
+import { type AppDatabase, createD1Database, type D1LikeDatabase, schema } from "@/db";
 import { type BotScope } from "@/domain";
 import { handleWorkerHttpRequest } from "@/server/http-runtime";
 import { createCloudflareRateLimiter } from "@/server/rate-limit";
@@ -23,8 +30,12 @@ import { assertBotWriteAccess } from "@/services/bot";
 import {
   type BotWorkQueueProducer,
   buildSystemJobSummary,
+  type CronMaintenanceReport,
   type DecisionFinalizeQueueProducer,
   finalizeDecisionCard,
+  handleBotWorkDlqMessage,
+  handleBotWorkTask,
+  runScheduledMaintenance,
   type SystemJobSummary,
 } from "@/services/system";
 import { createLogger } from "@/shared/logger";
@@ -52,6 +63,11 @@ export interface WorkerExecutionContextLike {
   waitUntil(promise: Promise<unknown>): void;
 }
 
+export interface WorkerScheduledControllerLike {
+  readonly cron: string;
+  readonly scheduledTime: number;
+}
+
 export interface WorkerRuntimeEnv {
   readonly DB: D1LikeDatabase;
   readonly DECISION_FINALIZE_QUEUE: DecisionFinalizeQueueProducer;
@@ -66,6 +82,9 @@ export interface WorkerRuntimeEnv {
   readonly GITHUB_CLIENT_SECRET?: string;
   readonly OWNER_GITHUB_ID?: string;
   readonly XAI_API_KEY?: string;
+  readonly XAI_MODEL?: string;
+  readonly XAI_API_URL?: string;
+  readonly MODEL_ADAPTER?: ModelAdapter;
   readonly APP_ENV?: string;
 }
 
@@ -80,11 +99,22 @@ export type AssertExecutionContextCompatible = ExecutionContext extends WorkerEx
   ? true
   : never;
 
+export type AssertScheduledControllerCompatible =
+  ScheduledController extends WorkerScheduledControllerLike ? true : never;
+
 const workerLogger = createLogger("worker");
 
 const decisionFinalizeMessageSchema = z
   .object({
     card_id: z.string().trim().min(1).max(128),
+  })
+  .strict();
+
+const botWorkMessageSchema = z
+  .object({
+    decision_id: z.string().trim().min(1).max(128).optional(),
+    task_id: z.string().trim().min(1).max(128),
+    workspace_id: z.string().trim().min(1).max(128),
   })
   .strict();
 
@@ -106,6 +136,98 @@ export function recordFinalizeQueueOutcome(parentChanges: number): SystemJobSumm
 export interface DecisionFinalizeBatchEnv {
   readonly DB: D1LikeDatabase;
   readonly BOT_WORK_QUEUE: BotWorkQueueProducer;
+}
+
+export interface BotWorkBatchEnv {
+  readonly DB: D1LikeDatabase;
+  readonly XAI_API_KEY?: string;
+  readonly XAI_MODEL?: string;
+  readonly XAI_API_URL?: string;
+  readonly MODEL_ADAPTER?: ModelAdapter;
+}
+
+function resolveWorkerModelAdapter(env: BotWorkBatchEnv): ModelAdapter {
+  if (env.MODEL_ADAPTER !== undefined) {
+    return env.MODEL_ADAPTER;
+  }
+  return createGrokModelAdapter({
+    apiKey: env.XAI_API_KEY ?? "",
+    ...(env.XAI_API_URL !== undefined ? { endpointUrl: env.XAI_API_URL } : {}),
+    ...(env.XAI_MODEL !== undefined ? { model: env.XAI_MODEL } : {}),
+  });
+}
+
+async function resolveActiveWorkerBotContext(
+  db: AppDatabase,
+  workspaceId: string,
+  preferredBotId: string | null,
+): Promise<VerifiedBotContext | null> {
+  const workspace = await db.orm
+    .select({
+      id: schema.workspaces.id,
+      ownerUserId: schema.workspaces.ownerUserId,
+      isPaused: schema.workspaces.isPaused,
+    })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, workspaceId))
+    .get();
+
+  if (workspace === undefined || workspace.isPaused) {
+    return null;
+  }
+
+  const activeWorkers = await db.orm
+    .select()
+    .from(schema.botConnections)
+    .where(
+      and(
+        eq(schema.botConnections.workspaceId, workspaceId),
+        eq(schema.botConnections.channelType, "worker_bearer"),
+        eq(schema.botConnections.status, "active"),
+      ),
+    )
+    .orderBy(asc(schema.botConnections.createdAt), asc(schema.botConnections.id))
+    .all();
+
+  if (activeWorkers.length === 0) {
+    return null;
+  }
+
+  const parsedCandidates = activeWorkers.map((row) => ({
+    row,
+    scopes: parseBotScopes(row.scopes),
+  }));
+
+  const preferred =
+    preferredBotId !== null
+      ? parsedCandidates.find(
+          (c) =>
+            c.row.id === preferredBotId &&
+            c.scopes.includes("tasks:write") &&
+            c.scopes.includes("proposals:write"),
+        )
+      : undefined;
+
+  const chosen =
+    preferred ??
+    parsedCandidates.find(
+      (c) => c.scopes.includes("tasks:write") && c.scopes.includes("proposals:write"),
+    ) ??
+    parsedCandidates.find((c) => c.scopes.includes("tasks:write"));
+
+  if (chosen === undefined) {
+    return null;
+  }
+
+  return verifyBotConnectionContext({
+    botConnectionId: chosen.row.id,
+    workspaceId: workspace.id,
+    workspaceOwnerUserId: workspace.ownerUserId,
+    isWorkspacePaused: workspace.isPaused,
+    channelType: "worker_bearer",
+    status: "active",
+    connectionScopes: chosen.scopes,
+  });
 }
 
 export async function handleDecisionFinalizeBatch(
@@ -154,6 +276,145 @@ export async function handleDecisionFinalizeBatch(
       message.retry({ delaySeconds: 5 });
     }
   }
+}
+
+export async function handleBotWorkBatch(
+  batch: MessageBatch,
+  env: BotWorkBatchEnv,
+  options?: {
+    readonly nowMs?: number;
+    readonly leaseDurationSeconds?: number;
+    readonly stepTimeoutMs?: number;
+  },
+): Promise<void> {
+  const db = createD1Database(env.DB);
+  const adapter = resolveWorkerModelAdapter(env);
+
+  for (const message of batch.messages) {
+    const parsed = botWorkMessageSchema.safeParse(message.body);
+    if (!parsed.success) {
+      workerLogger.warn("Dropping malformed bot-work queue message", {
+        messageId: message.id,
+      });
+      message.ack();
+      continue;
+    }
+
+    try {
+      const taskRow = await db.orm
+        .select({ assignedBotId: schema.tasks.assignedBotId })
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.id, parsed.data.task_id),
+            eq(schema.tasks.workspaceId, parsed.data.workspace_id),
+          ),
+        )
+        .get();
+
+      const botCtx = await resolveActiveWorkerBotContext(
+        db,
+        parsed.data.workspace_id,
+        taskRow?.assignedBotId ?? null,
+      );
+
+      if (botCtx === null) {
+        workerLogger.info("Skipping bot-work message: workspace paused or no active worker bot", {
+          workspaceId: parsed.data.workspace_id,
+          taskId: parsed.data.task_id,
+        });
+        message.ack();
+        continue;
+      }
+
+      const result = await handleBotWorkTask(db, botCtx, {
+        taskId: parsed.data.task_id,
+        ...(parsed.data.decision_id !== undefined ? { decisionId: parsed.data.decision_id } : {}),
+        adapter,
+        ...(options?.leaseDurationSeconds !== undefined
+          ? { leaseDurationSeconds: options.leaseDurationSeconds }
+          : {}),
+        ...(options?.stepTimeoutMs !== undefined ? { stepTimeoutMs: options.stepTimeoutMs } : {}),
+        ...(options?.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+      });
+
+      if (result.outcome === "retry") {
+        workerLogger.warn("Scheduling bot-work retry after transient failure", {
+          taskId: parsed.data.task_id,
+          delaySeconds: result.delaySeconds,
+          reason: result.reason,
+        });
+        message.retry({ delaySeconds: Math.max(1, result.delaySeconds) });
+        continue;
+      }
+
+      workerLogger.info("Processed bot-work message", {
+        taskId: parsed.data.task_id,
+        outcome: result.outcome,
+      });
+      message.ack();
+    } catch (error) {
+      workerLogger.error("Unhandled transient error in bot-work consumer; scheduling retry", {
+        error,
+        taskId: parsed.data.task_id,
+      });
+      message.retry({ delaySeconds: 15 });
+    }
+  }
+}
+
+export async function handleBotWorkDlqBatch(
+  batch: MessageBatch,
+  env: { readonly DB: D1LikeDatabase },
+  nowMs?: number,
+): Promise<void> {
+  const db = createD1Database(env.DB);
+  for (const message of batch.messages) {
+    const parsed = botWorkMessageSchema.safeParse(message.body);
+    if (!parsed.success) {
+      workerLogger.warn("Dropping malformed bot-work-dlq queue message", {
+        messageId: message.id,
+      });
+      message.ack();
+      continue;
+    }
+
+    try {
+      const outcome = await handleBotWorkDlqMessage(db, {
+        workspaceId: parsed.data.workspace_id,
+        taskId: parsed.data.task_id,
+        ...(parsed.data.decision_id !== undefined ? { decisionId: parsed.data.decision_id } : {}),
+        ...(nowMs !== undefined ? { nowMs } : {}),
+      });
+      workerLogger.warn("Recorded bot-work-dlq failure (BOT-03)", {
+        taskId: parsed.data.task_id,
+        applied: outcome.applied,
+      });
+      message.ack();
+    } catch (error) {
+      workerLogger.error("Transient failure recording bot-work-dlq message; retrying", {
+        error,
+        taskId: parsed.data.task_id,
+      });
+      message.retry({ delaySeconds: 10 });
+    }
+  }
+}
+
+export async function handleScheduledTrigger(
+  controller: WorkerScheduledControllerLike,
+  env: DecisionFinalizeBatchEnv,
+): Promise<CronMaintenanceReport> {
+  const nowMs = controller.scheduledTime > 0 ? controller.scheduledTime : Date.now();
+  const db = createD1Database(env.DB);
+  workerLogger.info("Running worker scheduled trigger", {
+    cron: controller.cron,
+    scheduledTime: nowMs,
+  });
+  return await runScheduledMaintenance(db, {
+    nowMs,
+    botWorkQueue: env.BOT_WORK_QUEUE,
+  });
 }
 
 const workerHandler = {
@@ -228,7 +489,17 @@ const workerHandler = {
       return;
     }
 
-    workerLogger.info("Received worker queue batch", {
+    if (batch.queue === "bot-work-dlq" || batch.queue.endsWith("-bot-work-dlq")) {
+      await handleBotWorkDlqBatch(batch, env);
+      return;
+    }
+
+    if (batch.queue === "bot-work" || batch.queue.endsWith("-bot-work")) {
+      await handleBotWorkBatch(batch, env);
+      return;
+    }
+
+    workerLogger.warn("Received unknown worker queue batch; acking", {
       queue: batch.queue,
       messageCount: batch.messages.length,
     });
@@ -237,16 +508,12 @@ const workerHandler = {
     }
   },
 
-  scheduled(
-    controller: ScheduledController,
-    _env: WorkerEnv,
-    _ctx: ExecutionContext,
+  async scheduled(
+    controller: WorkerScheduledControllerLike,
+    env: WorkerRuntimeEnv,
+    _ctx: WorkerExecutionContextLike,
   ): Promise<void> {
-    workerLogger.info("Received worker scheduled trigger", {
-      cron: controller.cron,
-      scheduledTime: controller.scheduledTime,
-    });
-    return Promise.resolve();
+    await handleScheduledTrigger(controller, env);
   },
 };
 
