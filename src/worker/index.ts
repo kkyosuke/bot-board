@@ -13,11 +13,15 @@ import {
   type VerifiedBotContext,
   verifyBotConnectionContext,
 } from "@/auth/bot";
+import { createD1Database } from "@/db";
 import { type BotScope } from "@/domain";
 import { createApp } from "@/server/app";
+import { createCloudflareRateLimiter } from "@/server/rate-limit";
+import { mountMcpRoutes } from "@/server/routes/mcp";
 import { assertBotWriteAccess } from "@/services/bot";
 import { buildSystemJobSummary, type SystemJobSummary } from "@/services/system";
 import { createLogger } from "@/shared/logger";
+import { createMcpBotServicePort } from "@/worker/mcp-port";
 
 export const WORKER_QUEUE_NAMES = ["decision-finalize", "bot-work", "bot-work-dlq"] as const;
 
@@ -75,7 +79,21 @@ const workerHandler = {
   async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/.well-known/")) {
-      const app = createApp();
+      const db = createD1Database(env.DB);
+      const mcpPort = createMcpBotServicePort(db);
+      const rateLimiter =
+        env.API_RATE_LIMITER !== undefined
+          ? createCloudflareRateLimiter(env.API_RATE_LIMITER)
+          : undefined;
+      const app = createApp({
+        mountMcpRoutes(honoApp) {
+          mountMcpRoutes(honoApp, {
+            port: mcpPort,
+            ...(rateLimiter !== undefined ? { rateLimiter } : {}),
+            ...(env.BETTER_AUTH_URL !== undefined ? { publicBaseUrl: env.BETTER_AUTH_URL } : {}),
+          });
+        },
+      });
       return await app.fetch(request);
     }
 

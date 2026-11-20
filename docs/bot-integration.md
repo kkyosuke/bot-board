@@ -1,6 +1,6 @@
 # Bot連携・状態設計
 
-作成日：2026-11-18 ／ 状態：設計基準（未実装）
+作成日：2026-11-18 ／ 状態：実装基準（S2 Bot共通サービス・`/api/mcp` 12ツール・D1認可境界 実装済 ／ S3 Human API・S4 OAuth 2.1・実機実証 未実施）
 
 [企画・要件書](concept.md)の「Botが管理し、人はスワイプで選択する」を実現するための構成。仕様名・操作名は本アプリの提案であり、各社製品の既存API名ではない。
 
@@ -51,7 +51,7 @@ flowchart TD
 ```
 
 - 基盤構成：Cloudflare（Workers / D1 / Queues / Cron）＋ Pulumi（`infra/`）。詳細は[システム構成・技術スタック仕様](architecture.md)を参照。
-- 禁止：モデルの会話履歴を状態の正とすること（常に Cloudflare D1 を正とする）（強制: `S2予定`）
+- 禁止：モデルの会話履歴を状態の正とすること（常に Cloudflare D1 を正とする）（強制: `src/services/bot/read-services.ts`, `tests/integration/mcp-bot.test.ts`）
 
 ## 3. データと状態
 
@@ -102,7 +102,7 @@ flowchart TD
 | `bot_connections.status = 'revoked'` | 同一 `db.batch` で保有中 `work_leases` と該当 `oauth_client_id` のOAuthトークン/同意を失効させ、以後の全読書きを即時拒否                                                                                                            | `NOT_AUTHORIZED`   |
 | `bot_connections.scopes` 不足        | 実効スコープがツールの必要スコープを満たさない呼び出しを拒否                                                                                                                                                                        | `NOT_AUTHORIZED`   |
 
-- 禁止：Bot向けMCPに承認・取消・保留・タスク強制再開・権限付与操作を公開すること（`BOT-02`）（強制: `bunfig.toml`, `S2予定`）
+- 禁止：Bot向けMCPに承認・取消・保留・タスク強制再開・権限付与操作を公開すること（`BOT-02`）（強制: `bunfig.toml`, `src/server/routes/mcp/index.ts`, `tests/integration/mcp-bot.test.ts`）
 - 仕様規則：各MCPツールはJSON Schemaで必須引数・列挙値を定義し短い概要を返す。一覧はページングし長文成果は `get_artifact` で別取得にする。曖昧な一致は候補を返し推測更新しない。
 
 ### 共通の更新規則

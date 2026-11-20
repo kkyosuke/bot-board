@@ -234,12 +234,12 @@ flowchart LR
   P2 --> P3["Phase 3: 判断〜Bot再開の縦通し（S7〜S8）"]
 ```
 
-| 項目                                                          | 状況                                                    | 次のアクション                               |
-| ------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------- |
-| 企画・要件（[concept.md](concept.md)）                        | 設計基準（S5 判断画面UI確定済）                         | `S6` で残り画面の確定事項を段階置換          |
-| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0・S1・S5 実装済）                           | `S2` / `S3` でMCP・Human API実装             |
-| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 実装基準（S1 DBスキーマ・`guardedBatch`・Domain遷移済） | `S2` / `S3` でサービス・5秒確定実装          |
-| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 設計基準（未実装）                                      | `S2`〜`S4` でMCP・Human API・OAuth 2.1を実装 |
-| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0・S1・S5 実装済）                           | 次は `S2` (#11) / `S3` (#12) を実装          |
-| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）                                | 全変更に適用                                 |
-| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`）                            | 稼働中                                       |
+| 項目                                                          | 状況                                                             | 次のアクション                                    |
+| ------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------- |
+| 企画・要件（[concept.md](concept.md)）                        | 設計基準（S5 判断画面UI確定済）                                  | `S6` で残り画面の確定事項を段階置換               |
+| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0・S1・S2・S5 実装済）                                | `S3` で Better Auth・Human API 13本を実装         |
+| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 実装基準（S1 DB・Domain遷移、S2 Botサービス・冪等・WorkLease済） | `S3` で Human判断・5秒Queue確定実装               |
+| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 実装基準（S2 `/api/mcp` 12ツール・D1認可境界 実装済）            | `S3`/`S4` で Human API・OAuth 2.1・検証環境を実装 |
+| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0・S1・S2・S5 実装済）                                | 次は `S3` (#12) を実装                            |
+| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）                                         | 全変更に適用                                      |
+| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`）                                     | 稼働中                                            |
