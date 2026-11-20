@@ -31,7 +31,7 @@ jobs:
   deploy:
     name: deploy (${{ inputs.stack }})
     runs-on: ubuntu-latest
-    environment: ${{ inputs.stack }}
+    environment: ${{ inputs.stack == 'prod' && 'prd-deploy' || inputs.stack }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
           GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_GEMINI_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           # Non-secret environment config (reads GitHub Environment Variables first, falls back to Secrets)

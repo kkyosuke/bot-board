@@ -99,12 +99,31 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
       "XAI_API_KEY",
       "META_MODEL_API_KEY",
     ];
+    const expectedSecretExpressions: Readonly<Record<string, string>> = {
+      BETTER_AUTH_SECRET: "BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}",
+      GITHUB_CLIENT_ID: "GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}",
+      GITHUB_CLIENT_SECRET: "GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}",
+      GEMINI_API_KEY:
+        "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_GEMINI_API_KEY }}",
+      XAI_API_KEY: "XAI_API_KEY: ${{ secrets.XAI_API_KEY }}",
+      META_MODEL_API_KEY: "META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}",
+    };
     for (const secretName of syncedWorkerSecrets) {
+      const expectedExpr = expectedSecretExpressions[secretName];
+      expect(expectedExpr).toBeDefined();
       expect(infraIndex).toContain(`"${secretName}"`);
-      expect(deployYml).toContain(`${secretName}: \${{ secrets.${secretName} }}`);
+      if (expectedExpr !== undefined) {
+        expect(deployYml).toContain(expectedExpr);
+      }
       expect(deployYml).not.toContain(`vars.${secretName}`);
       expect(runbookMd).toContain(secretName);
     }
+    expect(deployYml).toContain(
+      "environment: ${{ inputs.stack == 'prod' && 'prd-deploy' || inputs.stack }}",
+    );
+    expect(runbookMd).toContain("prd-deploy");
+    expect(runbookMd).toContain("GOOGLE_GEMINI_API_KEY");
+    expect(deployYml).not.toContain("vars.GOOGLE_GEMINI_API_KEY");
     expect(deployYml).not.toContain("vars.CLOUDFLARE_API_TOKEN");
     expect(deployYml).not.toContain("vars.PULUMI_ACCESS_TOKEN");
     expect(deployYml).not.toContain("vars.PULUMI_BACKEND_URL");
