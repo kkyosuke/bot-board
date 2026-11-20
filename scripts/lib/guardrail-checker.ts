@@ -625,6 +625,163 @@ function checkUnverifiedBotStatusClaims(
   }
 }
 
+function extractAcIdsFromText(text: string): string[] {
+  const results = new Set<string>();
+
+  // Expand shorthand ranges like `UX-01`〜`05` or DEC-01~04
+  const rangePattern = /`?(UX|DEC|BOT)-(\d{2})`?\s*[〜~\-–]\s*`?(?:(?:UX|DEC|BOT)-)?(\d{2})`?/g;
+  for (const match of text.matchAll(rangePattern)) {
+    const prefix = match[1];
+    const startNum = Number(match[2]);
+    const endNum = Number(match[3]);
+    if (prefix !== undefined && Number.isInteger(startNum) && Number.isInteger(endNum)) {
+      const low = Math.min(startNum, endNum);
+      const high = Math.max(startNum, endNum);
+      for (let n = low; n <= high; n += 1) {
+        results.add(`${prefix}-${String(n).padStart(2, "0")}`);
+      }
+    }
+  }
+
+  const singlePattern = /\b(UX|DEC|BOT)-(\d{2})\b/g;
+  for (const match of text.matchAll(singlePattern)) {
+    const prefix = match[1];
+    const num = match[2];
+    if (prefix !== undefined && num !== undefined) {
+      results.add(`${prefix}-${num}`);
+    }
+  }
+
+  return [...results];
+}
+
+function checkImplementationPlanAcConsistency(
+  parsedPlan: ParsedMarkdown | undefined,
+  errors: string[],
+): void {
+  if (parsedPlan === undefined) {
+    return;
+  }
+
+  const sliceClaims: Array<{
+    readonly lineNumber: number;
+    readonly sliceId: string;
+    readonly acIds: readonly string[];
+  }> = [];
+
+  let sliceColIndex = -1;
+  let verificationColIndex = -1;
+
+  for (const { lineNumber, text } of parsedPlan.proseLines) {
+    if (!text.trim().startsWith("|")) {
+      continue;
+    }
+    const cells = splitMarkdownTableRow(text);
+    if (cells.length < 2) {
+      continue;
+    }
+
+    if (sliceColIndex === -1) {
+      const foundSliceIdx = cells.findIndex((cell) => /^Slice$/i.test(cell));
+      const foundVerifIdx = cells.findIndex((cell) => cell.includes("検証"));
+      if (foundSliceIdx !== -1 && foundVerifIdx !== -1) {
+        sliceColIndex = foundSliceIdx;
+        verificationColIndex = foundVerifIdx;
+      }
+      continue;
+    }
+
+    if (cells.every((cell) => /^:?-{2,}:?$/.test(cell))) {
+      continue;
+    }
+
+    const sliceCell = cells[sliceColIndex] ?? "";
+    const sliceMatch = /^\*{0,2}(S[0-8])\*{0,2}\b/.exec(sliceCell);
+    if (sliceMatch === null) {
+      sliceColIndex = -1;
+      verificationColIndex = -1;
+      continue;
+    }
+
+    const sliceId = sliceMatch[1] ?? "";
+    const verificationCell = cells[verificationColIndex] ?? "";
+    const acIds = extractAcIdsFromText(verificationCell);
+    if (acIds.length > 0) {
+      sliceClaims.push({ lineNumber, sliceId, acIds });
+    }
+  }
+
+  if (sliceClaims.length === 0) {
+    return;
+  }
+
+  const traceByAcId = new Map<string, Set<string>>();
+  let acColIndex = -1;
+  let implSliceColIndex = -1;
+  let finalE2eColIndex = -1;
+
+  for (const { text } of parsedPlan.proseLines) {
+    if (!text.trim().startsWith("|")) {
+      continue;
+    }
+    const cells = splitMarkdownTableRow(text);
+    if (cells.length < 3) {
+      continue;
+    }
+
+    if (acColIndex === -1) {
+      const foundAcIdx = cells.findIndex((cell) => /^AC\s*ID$/i.test(cell));
+      const foundImplIdx = cells.findIndex((cell) => cell.includes("実装スライス"));
+      const foundFinalIdx = cells.findIndex((cell) => cell.includes("最終E2E"));
+      if (foundAcIdx !== -1 && foundImplIdx !== -1) {
+        acColIndex = foundAcIdx;
+        implSliceColIndex = foundImplIdx;
+        finalE2eColIndex = foundFinalIdx;
+      }
+      continue;
+    }
+
+    if (cells.every((cell) => /^:?-{2,}:?$/.test(cell))) {
+      continue;
+    }
+
+    const acCell = cells[acColIndex] ?? "";
+    const acMatch = /`?((?:UX|DEC|BOT)-\d{2})`?/.exec(acCell);
+    if (acMatch === null) {
+      acColIndex = -1;
+      implSliceColIndex = -1;
+      finalE2eColIndex = -1;
+      continue;
+    }
+
+    const acId = acMatch[1] ?? "";
+    const combinedSlicesText = `${cells[implSliceColIndex] ?? ""} ${finalE2eColIndex !== -1 ? (cells[finalE2eColIndex] ?? "") : ""}`;
+    const slices = new Set<string>();
+    for (const match of combinedSlicesText.matchAll(/\b(S[0-8])\b/g)) {
+      const s = match[1];
+      if (s !== undefined) {
+        slices.add(s);
+      }
+    }
+    traceByAcId.set(acId, slices);
+  }
+
+  for (const claim of sliceClaims) {
+    for (const acId of claim.acIds) {
+      const tracedSlices = traceByAcId.get(acId);
+      if (tracedSlices === undefined) {
+        errors.push(
+          `docs/implementation-plan.md:${claim.lineNumber}: Slice ${claim.sliceId} references AC "${acId}", which is missing from the AC trace table.`,
+        );
+      } else if (!tracedSlices.has(claim.sliceId)) {
+        errors.push(
+          `docs/implementation-plan.md:${claim.lineNumber}: Slice ${claim.sliceId} claims AC "${acId}" in §2, but §3 AC trace table does not list ${claim.sliceId} under "${acId}".`,
+        );
+      }
+    }
+  }
+}
+
 export function validateRepositoryGuardrails(repoRoot: string): GuardrailCheckReport {
   const realRepoRoot = realpathSync.native(resolve(repoRoot));
   const errors: string[] = [];
@@ -657,6 +814,7 @@ export function validateRepositoryGuardrails(repoRoot: string): GuardrailCheckRe
     parsedByRelPath.get("docs/implementation-plan.md"),
     errors,
   );
+  checkImplementationPlanAcConsistency(parsedByRelPath.get("docs/implementation-plan.md"), errors);
 
   let checkedProhibitionBullets = 0;
 

@@ -1,0 +1,187 @@
+@import "tailwindcss";
+
+:root {
+  --surface-bg: #f6f6f4;
+  --surface-card: #ffffff;
+  --surface-subtle: #efefe9;
+  --surface-elevated: #ffffff;
+  --border-default: #dfdfd6;
+  --border-subtle: #ecece4;
+  --ink-primary: #171717;
+  --ink-muted: #5c5c57;
+  --accent-primary: #171717;
+  --accent-primary-ink: #ffffff;
+  --accent-link: #0f5ea8;
+  --tone-accept: #0d8a55;
+  --tone-accept-bg: #ecf9f2;
+  --tone-accept-border: #a7e3c5;
+  --tone-decline: #c83349;
+  --tone-decline-bg: #fef1f2;
+  --tone-decline-border: #f7bcc5;
+  --tone-warn: #a6620a;
+  --tone-warn-bg: #fef8ec;
+  --tone-warn-border: #f3d59c;
+  --tone-info-bg: #eef4fb;
+  --tone-info-border: #c5daf2;
+  --shadow-card: 0 1px 2px rgba(23, 23, 23, 0.05), 0 14px 32px -12px rgba(23, 23, 23, 0.14);
+  --shadow-back: 0 1px 2px rgba(23, 23, 23, 0.04), 0 8px 18px -10px rgba(23, 23, 23, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-bg: #121211;
+    --surface-card: #1b1b19;
+    --surface-subtle: #252522;
+    --surface-elevated: #22221f;
+    --border-default: #31312c;
+    --border-subtle: #282824;
+    --ink-primary: #f4f4ef;
+    --ink-muted: #a6a69d;
+    --accent-primary: #f4f4ef;
+    --accent-primary-ink: #121211;
+    --accent-link: #7cb8f7;
+    --tone-accept: #34c782;
+    --tone-accept-bg: rgba(52, 199, 130, 0.12);
+    --tone-accept-border: rgba(52, 199, 130, 0.36);
+    --tone-decline: #f4667b;
+    --tone-decline-bg: rgba(244, 102, 123, 0.12);
+    --tone-decline-border: rgba(244, 102, 123, 0.36);
+    --tone-warn: #f0b14b;
+    --tone-warn-bg: rgba(240, 177, 75, 0.13);
+    --tone-warn-border: rgba(240, 177, 75, 0.36);
+    --tone-info-bg: rgba(124, 184, 247, 0.12);
+    --tone-info-border: rgba(124, 184, 247, 0.32);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 36px -12px rgba(0, 0, 0, 0.6);
+    --shadow-back: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 18px -10px rgba(0, 0, 0, 0.45);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background-color: var(--surface-bg);
+  color: var(--ink-primary);
+  font-family:
+    "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN",
+    "Yu Gothic UI",
+    "Noto Sans JP",
+    system-ui,
+    -apple-system,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+.bb-card-shadow {
+  box-shadow: var(--shadow-card);
+}
+
+.bb-back-shadow {
+  box-shadow: var(--shadow-back);
+}
+
+.bb-spring {
+  transition:
+    transform 320ms cubic-bezier(0.22, 1.32, 0.36, 1),
+    opacity 200ms ease;
+}
+
+.bb-fly-out {
+  transition:
+    transform 250ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 200ms ease;
+}
+
+.bb-stack-lift {
+  transition:
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease;
+}
+
+.bb-progress-fill {
+  transition: width 340ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.bb-card-scroll {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+@keyframes bb-slash {
+  0% {
+    transform: translateX(-115%) skewX(-24deg);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.52;
+  }
+  100% {
+    transform: translateX(135%) skewX(-24deg);
+    opacity: 0;
+  }
+}
+
+.bb-slash-beam {
+  position: absolute;
+  inset: 0;
+  width: 60%;
+  pointer-events: none;
+  z-index: 35;
+  animation: bb-slash 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes bb-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.13);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.bb-pop {
+  animation: bb-pop 240ms cubic-bezier(0.22, 1.4, 0.36, 1);
+}
+
+@keyframes bb-pulse {
+  0% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0.45;
+  }
+}
+
+.bb-skeleton {
+  background-color: var(--surface-subtle);
+  animation: bb-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bb-spring,
+  .bb-fly-out,
+  .bb-stack-lift,
+  .bb-progress-fill,
+  .bb-pop,
+  .bb-skeleton {
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
+
+  .bb-slash-beam {
+    display: none !important;
+  }
+}

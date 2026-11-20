@@ -364,3 +364,4 @@ rules = {
 
 [test]
 randomize = true
+pathIgnorePatterns = ["tests/e2e/**"]
