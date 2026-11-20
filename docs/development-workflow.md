@@ -164,7 +164,7 @@ flowchart TD
 | 区分                               | 例                                                                                                                                                                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **NG**（経緯・長文）               | 当初はスワイプ直後に確定してBotを動かす想定だったが、スマホでの誤スワイプが懸念されたため議論の結果5秒間の取り消し猶予を設けることに変更した。そのため仮確定の間はBotが動かないように注意する必要がある。 |
-| **OK**（結論・状況・ガードレール） | 状態：`pending ⇄ provisional(5s) → accepted / declined`（未実装・5s以内取消で `pending` 復帰）<br>禁止：`provisional` 中のBot着手・外部実行（`DEC-01`）（強制: `S1予定`, `S3予定`）                       |
+| **OK**（結論・状況・ガードレール） | 状態：`pending ⇄ provisional(5s) → accepted / declined`（未実装・5s以内取消で `pending` 復帰）<br>禁止：`provisional` 中のBot着手・外部実行（`DEC-01`）（強制: `src/domain/card-state.ts`, `S3予定`）     |
 
 ### 視覚化フォーマット基準（日本語最小化）
 
@@ -234,12 +234,12 @@ flowchart LR
   P2 --> P3["Phase 3: 判断〜Bot再開の縦通し（S7〜S8）"]
 ```
 
-| 項目                                                          | 状況                                            | 次のアクション                                   |
-| ------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------ |
-| 企画・要件（[concept.md](concept.md)）                        | 設計基準（S5 判断画面UI確定済）                 | `S6` で残り画面の確定事項を段階置換              |
-| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0 検証・CI基盤・S5 UI試作実装済）    | `S1` でPulumi・D1・Domain実装                    |
-| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 設計基準（`selection_mode` 検証のみ S5 実装済） | `S1`〜`S3` でスキーマ・状態遷移を実装            |
-| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 設計基準（未実装）                              | `S2`〜`S4` でMCP・Human API・接続実証を実施      |
-| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0・S5 実装済）                       | 次は `S1` または `S6` のGitHub Issueを起票し進行 |
-| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）                        | 全変更に適用                                     |
-| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`）                    | 稼働中                                           |
+| 項目                                                          | 状況                                                    | 次のアクション                               |
+| ------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------- |
+| 企画・要件（[concept.md](concept.md)）                        | 設計基準（S5 判断画面UI確定済）                         | `S6` で残り画面の確定事項を段階置換          |
+| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0・S1・S5 実装済）                           | `S2` / `S3` でMCP・Human API実装             |
+| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 実装基準（S1 DBスキーマ・`guardedBatch`・Domain遷移済） | `S2` / `S3` でサービス・5秒確定実装          |
+| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 設計基準（未実装）                                      | `S2`〜`S4` でMCP・Human API・OAuth 2.1を実装 |
+| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0・S1・S5 実装済）                           | 次は `S2` (#11) / `S3` (#12) を実装          |
+| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）                                | 全変更に適用                                 |
+| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`）                            | 稼働中                                       |

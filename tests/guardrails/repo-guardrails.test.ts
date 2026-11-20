@@ -146,6 +146,7 @@ describe("repository mechanical guardrails", () => {
       }
 
       writeFileSync(join(tempRoot, "src/db/index.ts"), "export const dbToken = 1;\n");
+      writeFileSync(join(tempRoot, "src/db/sqlite.ts"), "export const sqliteDb = 1;\n");
       writeFileSync(
         join(tempRoot, "src/server/routes/human/index.ts"),
         "export const route = 1;\n",
@@ -207,6 +208,16 @@ describe("repository mechanical guardrails", () => {
           file: "src/server/app-db.ts",
           code: 'import { dbToken } from "@/db";\nexport const x = dbToken;\n',
           expectedRule: "import/no-restricted-paths",
+        },
+        {
+          file: "src/worker/bad-sqlite-mod.ts",
+          code: 'import { sqliteDb } from "@/db/sqlite";\nexport const x = sqliteDb;\n',
+          expectedRule: "import/no-restricted-paths",
+        },
+        {
+          file: "src/worker/bad-bun-sqlite.ts",
+          code: 'import { Database } from "bun:sqlite";\nexport const db = Database;\n',
+          expectedRule: "no-restricted-imports",
         },
         {
           file: "src/services/bot/bad-human.ts",

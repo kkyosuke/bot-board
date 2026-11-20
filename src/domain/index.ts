@@ -1,4 +1,29 @@
 export {
+  type BudgetCheckResult,
+  type BudgetLimit,
+  budgetLimitSchema,
+  type BudgetUsageSnapshot,
+  DEFAULT_BUDGET_LIMIT,
+  evaluateBudgetLimit,
+  parseBudgetLimit,
+  serializeBudgetLimit,
+} from "./budget";
+export {
+  assertCanDeferCard,
+  assertCanUndoCard,
+  assertCardIsFinalizedForBot,
+  assertDecisionCardNotFinalized,
+  assertExpectedVersion,
+  assertGroupDeclinePolicyConsistency,
+  type CardDecideEvaluation,
+  type CardFinalizeEvaluation,
+  DECISION_RECORD_STATUSES,
+  type DecisionRecordStatus,
+  evaluateCardDecidePreconditions,
+  evaluateCardFinalizeOutcome,
+  hasVersionMismatch,
+} from "./card-state";
+export {
   type ArtifactPreview,
   BOARD_VIEW_STATES,
   type BoardViewState,
@@ -19,7 +44,16 @@ export {
   type SelectionMode,
   validateDecisionPayload,
 } from "./decision-card";
-export { BOT_SCOPES, type BotScope, DomainError, ERROR_CODES, type ErrorCode } from "./errors";
+export {
+  BOT_SCOPES,
+  type BotScope,
+  DomainError,
+  type DomainErrorDetails,
+  type DomainErrorHttpStatus,
+  ERROR_CODES,
+  type ErrorCode,
+  errorCodeToHttpStatus,
+} from "./errors";
 export {
   computeSwipeVisuals,
   DRAG_INTENT_THRESHOLD_PX,
@@ -37,3 +71,19 @@ export {
   type SwipeVisualState,
   VERTICAL_LOCK_RATIO,
 } from "./swipe-gesture";
+export {
+  assertCanClaimTask,
+  assertCanRetryTask,
+  assertCanSubmitProposal,
+  assertCanSupersedeProposal,
+  BOT_RECORD_RESULT_OUTCOMES,
+  type BotRecordResultOutcome,
+  isTaskStatus,
+  ON_DECLINE_POLICIES,
+  type OnDeclinePolicy,
+  resolveTaskStatusAfterDecisionFinalized,
+  resolveTaskStatusOnRecordResult,
+  resolveTaskStatusWhenCardsInactive,
+  TASK_STATUSES,
+  type TaskStatus,
+} from "./task-state";

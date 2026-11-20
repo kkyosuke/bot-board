@@ -1,0 +1,20 @@
+config:
+  bot-board:appEnv: staging
+  bot-board:rateLimitNamespaceId: "1001"
+  bot-board:rateLimitRequests: "120"
+  bot-board:rateLimitPeriodSeconds: "60"
+  bot-board:workerCpuMsLimit: "50"
+  # Required before `pulumi up` (set via `pulumi config set --secret`):
+  # - cloudflare:apiToken (or CLOUDFLARE_API_TOKEN env var)
+  # - bot-board:accountId
+  # - bot-board:betterAuthUrl (e.g. https://staging.bot-board.example.com)
+  # - bot-board:trustedOrigins (comma-separated HTTPS origins)
+  # - bot-board:ownerGithubId
+  # - bot-board:betterAuthSecret (--secret)
+  # - bot-board:githubClientId (--secret)
+  # - bot-board:githubClientSecret (--secret)
+  # Optional:
+  # - bot-board:xaiApiKey (--secret)
+  # - bot-board:zoneId
+  # - bot-board:hostname
+  # - bot-board:routePattern
