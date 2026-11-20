@@ -47,8 +47,15 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
     expect(infraIndex).toContain('type: "ratelimit"');
     expect(infraIndex).toContain("rateLimitNamespaceId");
     expect(infraIndex).toContain("RATE_LIMIT_PERIOD_SECONDS");
+    expect(infraIndex).toContain("WORKER_LLM_PROVIDER");
     expect(infraIndex).toContain("XAI_MODEL");
     expect(infraIndex).toContain("XAI_API_URL");
+    expect(infraIndex).toContain("GEMINI_API_KEY");
+    expect(infraIndex).toContain("GEMINI_MODEL");
+    expect(infraIndex).toContain("GEMINI_API_URL");
+    expect(infraIndex).toContain("META_MODEL_API_KEY");
+    expect(infraIndex).toContain("META_MODEL");
+    expect(infraIndex).toContain("META_API_URL");
     expect(infraIndex).toContain("deliveryDelay: 5");
     expect(infraIndex).toContain("deadLetterQueue:");
     expect(infraIndex).toContain("export const d1DatabaseUuid");
@@ -81,6 +88,36 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
       expect(deployYml).toContain(`${pulumiSecret}:`);
       expect(runbookMd).toContain(pulumiSecret);
     }
+
+    // Verify GitHub Secrets -> GitHub Actions -> Pulumi secret -> Cloudflare Worker secret_text parity
+    expect(infraIndex).toContain("pulumi.secret(");
+    const syncedWorkerSecrets = [
+      "BETTER_AUTH_SECRET",
+      "GITHUB_CLIENT_ID",
+      "GITHUB_CLIENT_SECRET",
+      "GEMINI_API_KEY",
+      "XAI_API_KEY",
+      "META_MODEL_API_KEY",
+    ];
+    for (const secretName of syncedWorkerSecrets) {
+      expect(infraIndex).toContain(`"${secretName}"`);
+      expect(deployYml).toContain(`${secretName}: \${{ secrets.${secretName} }}`);
+      expect(deployYml).not.toContain(`vars.${secretName}`);
+      expect(runbookMd).toContain(secretName);
+    }
+    expect(deployYml).not.toContain("vars.CLOUDFLARE_API_TOKEN");
+    expect(deployYml).not.toContain("vars.PULUMI_ACCESS_TOKEN");
+    expect(deployYml).not.toContain("vars.PULUMI_BACKEND_URL");
+    expect(deployYml).not.toContain("vars.PULUMI_CONFIG_PASSPHRASE");
+    expect(deployYml).not.toContain("vars.AWS_ACCESS_KEY_ID");
+    expect(deployYml).not.toContain("vars.AWS_SECRET_ACCESS_KEY");
+    expect(deployYml).not.toContain("vars.SMOKE_BOT_TOKEN");
+    expect(deployYml).toContain("AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}");
+    expect(deployYml).toContain("AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}");
+    expect(deployTs).toContain("buildPulumiCommandEnv");
+    expect(deployTs).toContain("runPulumiLogin");
+    expect(deployTs).not.toContain('["login", pulumiBackendUrl');
+    expect(deployTs).not.toContain('"login", pulumiBackendUrl');
   });
 
   test("Pulumi stack configs isolate rateLimitNamespaceId, enforce safe workerCpuMsLimit (5000..300000ms), and contain zero inline plaintext secrets (B2, M2)", () => {
@@ -90,6 +127,8 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
       "githubClientId",
       "githubClientSecret",
       "xaiApiKey",
+      "geminiApiKey",
+      "metaModelApiKey",
       "apiToken",
     ];
     const secretInlineValuePattern = new RegExp(

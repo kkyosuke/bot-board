@@ -180,7 +180,7 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
           status: 204,
           headers: {
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, HEAD, POST, DELETE, OPTIONS",
             "Access-Control-Expose-Headers":
               "WWW-Authenticate, Mcp-Session-Id, MCP-Protocol-Version",
           },
@@ -188,9 +188,9 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
       );
     }
 
-    if (url.pathname === "/api/mcp" && method === "POST") {
+    if (url.pathname === "/api/mcp" && (method === "POST" || method === "HEAD")) {
       const headers = new Headers(init?.headers);
-      if (headers.get("Authorization") === "Bearer bbw_valid") {
+      if (method === "POST" && headers.get("Authorization") === "Bearer bbw_valid") {
         return Promise.resolve(
           new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [] } }), {
             status: 200,
@@ -202,7 +202,7 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
         );
       }
       return Promise.resolve(
-        new Response(JSON.stringify({ code: "NOT_AUTHORIZED" }), {
+        new Response(method === "HEAD" ? null : JSON.stringify({ code: "NOT_AUTHORIZED" }), {
           status: 401,
           headers: {
             "Content-Type": "application/json",
@@ -302,7 +302,7 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
       const failed = report.checks.filter((c) => !c.ok);
       expect(failed).toEqual([]);
       expect(report.ok).toBe(true);
-      expect(report.checks.length).toBe(16);
+      expect(report.checks.length).toBe(17);
       expect(seenSpaNavigateHeaders).toEqual({
         "/": "navigate",
         "/board": "navigate",
@@ -332,7 +332,7 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
       fetchImpl: buildMockLiveFetch(),
     });
     expect(okReport.ok).toBe(true);
-    expect(okReport.checks.length).toBe(17);
+    expect(okReport.checks.length).toBe(18);
 
     const failReport = await runLiveSmokeCheck({
       baseUrl: "https://staging.bot-board.example.com",

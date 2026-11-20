@@ -499,7 +499,8 @@ interface PlanStatusInfo {
 }
 
 const CODE_ONLY_UNDEPLOYED_PATTERN = /(?:コード実装済|デプロイ[^\s|]*(?:後|待)|未デプロイ)/;
-const BLANKET_ALL_BOTS_CLAIM_PATTERN = /(?:4種類対応済|全\s*Bot\s*対応済|全経路対応済)/i;
+const BLANKET_ALL_BOTS_CLAIM_PATTERN =
+  /(?:[45]種類対応済|全種類対応済|全\s*Bot\s*対応済|全経路対応済)/i;
 const NEGATED_CLAIM_CONTEXT_PATTERN =
   /(?:表示しない|記載しない|対応済みにしない|数えない|保証しない|禁止|未実施|未確認)/;
 
@@ -663,9 +664,9 @@ function checkUnverifiedBotStatusClaims(
     }
   }
 
-  if (verifiedTableRows < 4) {
+  if (verifiedTableRows < 5) {
     errors.push(
-      "docs/bot-integration.md:1: Missing or incomplete Bot verification status table (expected >= 4 channel rows).",
+      "docs/bot-integration.md:1: Missing or incomplete Bot verification status table (expected >= 5 channel rows).",
     );
   }
 

@@ -49,8 +49,9 @@ function createMinimalDocsRepo(
         "| --- | --- | --- |",
         "| ChatGPT | 検証 | 未実施 |",
         "| Claude | 検証 | 未実施 |",
+        "| Meta Muse | 検証 | 未特定 |",
+        "| Google Gemini | 検証 | 未実施 |",
         "| Grok | 検証 | 未実施 |",
-        "| Muse | 検証 | 未特定 |",
         "",
       ].join("\n"),
     );
@@ -239,8 +240,9 @@ describe("documentation and guardrail ratchet checker", () => {
           "| --- | --- | --- |",
           "| ChatGPT | 検証 | 検証済 |",
           "| Claude | 検証 | 未実施 |",
+          "| Meta Muse | 検証 | 未特定 |",
+          "| Google Gemini | 検証 | 未実施 |",
           "| Grok | 検証 | 未実施 |",
-          "| Muse | 検証 | 未特定 |",
           "",
         ].join("\n"),
       );
@@ -322,12 +324,16 @@ describe("documentation and guardrail ratchet checker", () => {
           "| --- | --- | --- |",
           "| ChatGPT公式クライアント | 検証 | 対応済 |",
           "| Claude公式クライアント | 検証 | 検証済 |",
+          "| Meta Muse | 検証 | 未特定 |",
+          "| Google Gemini | 検証 | 未実施 |",
           "| Grok APIワーカー | 検証 | 未実施 |",
-          "| Muse | 検証 | 未特定 |",
           "",
         ].join("\n"),
       );
-      writeFileSync(join(root, "docs", "concept.md"), "# Concept\n\n現在4種類対応済みです。\n");
+      writeFileSync(
+        join(root, "docs", "concept.md"),
+        "# Concept\n\n現在5種類対応済みです。\n全種類対応済みの状態です。\n",
+      );
     });
 
     expect(undeployedS4Report.ok).toBe(false);
@@ -346,8 +352,9 @@ describe("documentation and guardrail ratchet checker", () => {
       ),
     ).toBe(true);
     expect(
-      undeployedS4Report.errors.some((e) => e.includes("Premature blanket Bot support claim")),
-    ).toBe(true);
+      undeployedS4Report.errors.filter((e) => e.includes("Premature blanket Bot support claim"))
+        .length,
+    ).toBe(2);
 
     // Even after S4 is deployed & S8 is implemented, Muse must stay 未特定 while unidentified in §4
     const museClaimAfterDeployReport = createMinimalDocsRepo((root) => {
@@ -383,6 +390,7 @@ describe("documentation and guardrail ratchet checker", () => {
           "| --- | --- | --- |",
           "| ChatGPT公式クライアント | 検証 | 対応済 |",
           "| Claude公式クライアント | 検証 | 対応済 |",
+          "| Google Gemini | 検証 | 対応済 |",
           "| Grok APIワーカー | 検証 | 対応済 |",
           "| Muse | 検証 | 対応済 |",
           "",

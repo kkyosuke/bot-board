@@ -16,7 +16,9 @@ config:
   # - bot-board:betterAuthSecret (--secret)
   # - bot-board:githubClientId (--secret)
   # - bot-board:githubClientSecret (--secret)
-  # - bot-board:xaiApiKey (--secret)
-  # Optional:
-  # - bot-board:xaiModel (default: grok-3-mini)
-  # - bot-board:xaiApiUrl (default: https://api.x.ai/v1/chat/completions)
+  # Autonomous worker LLM provider (grok | gemini | meta-muse; default: grok):
+  # Required secret matches selected bot-board:workerLlmProvider (xaiApiKey / geminiApiKey / metaModelApiKey):
+  # - bot-board:workerLlmProvider
+  # - bot-board:xaiApiKey (--secret) / xaiModel (default: grok-3-mini) / xaiApiUrl
+  # - bot-board:geminiApiKey (--secret) / geminiModel (default: gemini-3.5-flash-lite) / geminiApiUrl
+  # - bot-board:metaModelApiKey (--secret) / metaModel (default: muse-spark-1.3) / metaApiUrl

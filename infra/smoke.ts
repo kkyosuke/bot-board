@@ -226,8 +226,8 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
         throw new Error("Unexpected Access-Control-Allow-Credentials on OPTIONS /api/mcp");
       }
       const allowMethods = res.headers.get("access-control-allow-methods") ?? "";
-      if (!allowMethods.includes("POST")) {
-        throw new Error(`Access-Control-Allow-Methods missing POST: "${allowMethods}"`);
+      if (!allowMethods.includes("POST") || !allowMethods.includes("HEAD")) {
+        throw new Error(`Access-Control-Allow-Methods missing POST or HEAD: "${allowMethods}"`);
       }
       const exposeHeaders = res.headers.get("access-control-expose-headers") ?? "";
       if (!exposeHeaders.includes("WWW-Authenticate")) {
@@ -274,6 +274,39 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
         throw new Error(`Unexpected WWW-Authenticate header: "${wwwAuth}"`);
       }
       return "401 Bearer path-aware resource_metadata + scope + CORS";
+    }),
+  );
+
+  // 6c. MCP HEAD discovery probe (Google Gemini Custom App sends unauth HEAD /api/mcp -> 401 WWW-Authenticate + CORS)
+  checks.push(
+    await runSingleCheck("HEAD /api/mcp (unauth 401 WWW-Authenticate)", async () => {
+      const res = await fetchFn(`${origin}/api/mcp`, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status !== 401) {
+        throw new Error(`Expected 401, got ${res.status}`);
+      }
+      if (res.headers.get("access-control-allow-origin") !== "*") {
+        throw new Error("Missing Access-Control-Allow-Origin: * on 401 HEAD /api/mcp");
+      }
+      const exposeHeaders = res.headers.get("access-control-expose-headers") ?? "";
+      if (!exposeHeaders.includes("WWW-Authenticate")) {
+        throw new Error(
+          `Access-Control-Expose-Headers missing WWW-Authenticate on HEAD: "${exposeHeaders}"`,
+        );
+      }
+      const wwwAuth = res.headers.get("www-authenticate") ?? "";
+      if (
+        !wwwAuth.includes("Bearer") ||
+        !wwwAuth.includes(
+          `resource_metadata="${origin}/.well-known/oauth-protected-resource/api/mcp"`,
+        ) ||
+        !wwwAuth.includes("scope=")
+      ) {
+        throw new Error(`Unexpected WWW-Authenticate header on HEAD: "${wwwAuth}"`);
+      }
+      return "401 HEAD discovery probe ok";
     }),
   );
 

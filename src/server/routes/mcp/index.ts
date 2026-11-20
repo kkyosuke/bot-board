@@ -156,7 +156,7 @@ const NON_IDEMPOTENT_WRITE_TOOL_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
-const MCP_CORS_ALLOW_METHODS = "GET, POST, DELETE, OPTIONS";
+const MCP_CORS_ALLOW_METHODS = "GET, HEAD, POST, DELETE, OPTIONS";
 const MCP_CORS_ALLOW_HEADERS =
   "Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID";
 const MCP_CORS_EXPOSE_HEADERS = "WWW-Authenticate, Mcp-Session-Id, MCP-Protocol-Version";

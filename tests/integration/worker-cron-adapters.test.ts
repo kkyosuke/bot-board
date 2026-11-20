@@ -28,6 +28,7 @@ import workerHandler, {
   handleBotWorkBatch,
   handleBotWorkDlqBatch,
   handleScheduledTrigger,
+  resolveWorkerModelAdapter,
 } from "@/worker";
 
 const openDbs: SqliteAppDatabase[] = [];
@@ -1626,5 +1627,117 @@ describe("S7 Autonomous Worker (bot-work / bot-work-dlq), 4-Duty Cron & Budget E
       )
       .get();
     expect(subKey).toBeDefined();
+  });
+
+  test("resolves multi-provider worker adapters (grok/gemini/meta-muse + auto-detect) and records permanent BOT-03 failure on invalid WORKER_LLM_PROVIDER without crashing queue batch", async () => {
+    const f = await setupWorkerFixture();
+
+    expect(
+      resolveWorkerModelAdapter({
+        DB: f.d1,
+        WORKER_LLM_PROVIDER: "gemini",
+        GEMINI_API_KEY: "test-gemini-key",
+        GEMINI_MODEL: "gemini-3.8-flash",
+      }).name,
+    ).toBe("google-gemini:gemini-3.8-flash");
+
+    expect(
+      resolveWorkerModelAdapter({
+        DB: f.d1,
+        WORKER_LLM_PROVIDER: "meta-muse",
+        META_MODEL_API_KEY: "test-meta-key",
+      }).name,
+    ).toBe("meta-muse:muse-spark-1.3");
+
+    expect(
+      resolveWorkerModelAdapter({
+        DB: f.d1,
+        GEMINI_API_KEY: "auto-gemini-only",
+      }).name,
+    ).toBe("google-gemini:gemini-3.5-flash-lite");
+
+    expect(
+      resolveWorkerModelAdapter({
+        DB: f.d1,
+        META_MODEL_API_KEY: "auto-meta-only",
+      }).name,
+    ).toBe("meta-muse:muse-spark-1.3");
+
+    // Explicit WORKER_LLM_PROVIDER overrides higher-priority configured keys
+    expect(
+      resolveWorkerModelAdapter({
+        DB: f.d1,
+        WORKER_LLM_PROVIDER: "meta-muse",
+        XAI_API_KEY: "test-xai-key",
+        GEMINI_API_KEY: "test-gemini-key",
+        META_MODEL_API_KEY: "test-meta-key",
+      }).name,
+    ).toBe("meta-muse:muse-spark-1.3");
+
+    // Whitespace-only XAI_API_KEY skips to valid GEMINI_API_KEY
+    expect(
+      resolveWorkerModelAdapter({
+        DB: f.d1,
+        XAI_API_KEY: "   ",
+        GEMINI_API_KEY: "auto-gemini-after-blank-xai",
+      }).name,
+    ).toBe("google-gemini:gemini-3.5-flash-lite");
+
+    // Whitespace-only WORKER_LLM_PROVIDER falls back to auto-detection instead of invalid-provider
+    expect(
+      resolveWorkerModelAdapter({
+        DB: f.d1,
+        WORKER_LLM_PROVIDER: "   ",
+        GEMINI_API_KEY: "auto-gemini-blank-provider",
+      }).name,
+    ).toBe("google-gemini:gemini-3.5-flash-lite");
+
+    // Default when no keys are configured stays Grok for backwards compatibility
+    expect(resolveWorkerModelAdapter({ DB: f.d1 }).name).toBe("xai-grok:grok-3-mini");
+
+    // Explicit invalid WORKER_LLM_PROVIDER fails task cleanly (BOT-03), releases lease, and acks queue message
+    const created = await createTask(
+      f.db,
+      f.botCtx,
+      {
+        request_id: "invalid-provider-task-1",
+        title: "Invalid Provider Handling Task",
+        description: "Verify invalid WORKER_LLM_PROVIDER records permanent failure safely",
+        requires_approval: true,
+      },
+      f.getNow(),
+    );
+
+    const invalidBatch = createQueueBatch(
+      "bot-work",
+      [{ task_id: created.task_id, workspace_id: f.workspaceId }],
+      f.getNow() + 100,
+    );
+    await handleBotWorkBatch(
+      invalidBatch.batch,
+      {
+        DB: f.d1,
+        WORKER_LLM_PROVIDER: "unknown-provider-typo",
+      },
+      { nowMs: f.getNow() + 100 },
+    );
+
+    expect(invalidBatch.actions[0]?.acked).toBe(1);
+    expect(invalidBatch.actions[0]?.retried).toEqual([]);
+
+    const failedTask = await f.sqliteDb.orm
+      .select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, created.task_id))
+      .get();
+    expect(failedTask?.status).toBe("failed");
+    expect(failedTask?.statusReason ?? "").toContain("Unsupported WORKER_LLM_PROVIDER");
+
+    const activeLeases = await f.sqliteDb.orm
+      .select()
+      .from(schema.workLeases)
+      .where(eq(schema.workLeases.taskId, created.task_id))
+      .all();
+    expect(activeLeases).toHaveLength(0);
   });
 });

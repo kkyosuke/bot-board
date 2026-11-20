@@ -28,8 +28,17 @@ const EXTERNAL_CHANNEL_STATUS_LIST: ReadonlyArray<{
 }> = [
   { name: "ChatGPT Remote MCP", route: "mcp_oauth (#17)", status: "未実施（実機確認待）" },
   { name: "Claude Custom Connector", route: "mcp_oauth (#20)", status: "未実施（実機確認待）" },
+  {
+    name: "Meta Muse Custom Connector / Model API",
+    route: "mcp_oauth / worker (#33)",
+    status: "未実施（実機確認待）",
+  },
+  {
+    name: "Google Gemini MCP / Gemini API",
+    route: "mcp_oauth / worker (#34)",
+    status: "未実施（実機確認待）",
+  },
   { name: "Grok API Worker", route: "worker_bearer (#18)", status: "未実施（実機確認待）" },
-  { name: "Muse", route: "調査対象 (#19)", status: "未特定（サービス特定待）" },
 ];
 
 function formatErrorMessage(err: unknown, fallback: string): string {
