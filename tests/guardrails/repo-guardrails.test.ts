@@ -308,6 +308,16 @@ describe("repository mechanical guardrails", () => {
           code: 'import { tool } from "../../scripts/helper.ts";\nexport const x = tool;\n',
           expectedRule: "import/no-restricted-paths",
         },
+        {
+          file: "src/client/bad-bun-global.ts",
+          code: "export const ver = Bun.version;\n",
+          expectedRule: "no-restricted-globals",
+        },
+        {
+          file: "src/domain/bad-dom-global.ts",
+          code: "export const title = document.title;\n",
+          expectedRule: "no-restricted-globals",
+        },
       ];
 
       for (const testCase of rejectedCases) {

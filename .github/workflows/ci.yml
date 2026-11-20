@@ -16,7 +16,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Bun toolchain
@@ -36,3 +36,9 @@ jobs:
         run: bun run check:guardrails
       - name: Run test suite
         run: bun test
+      - name: Build client bundle
+        run: bun run build
+      - name: Install Playwright Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Run Playwright E2E suite
+        run: bun run test:e2e

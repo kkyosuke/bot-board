@@ -234,12 +234,12 @@ flowchart LR
   P2 --> P3["Phase 3: 判断〜Bot再開の縦通し（S7〜S8）"]
 ```
 
-| 項目                                                          | 状況                              | 次のアクション                              |
-| ------------------------------------------------------------- | --------------------------------- | ------------------------------------------- |
-| 企画・要件（[concept.md](concept.md)）                        | 初稿（設計提案）                  | Phase 2 実装時にUI状態・確定事項を段階置換  |
-| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0 検証・CI基盤実装済） | `S1` でPulumi・D1・Domain実装               |
-| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 設計基準（未実装）                | `S1`〜`S3` でスキーマ・状態遷移を実装       |
-| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 設計基準（未実装）                | `S2`〜`S4` でMCP・Human API・接続実証を実施 |
-| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0 実装済）             | 次は `S1` のGitHub Issueを起票して進行      |
-| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）          | 全変更に適用                                |
-| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`）      | 稼働中                                      |
+| 項目                                                          | 状況                                            | 次のアクション                                   |
+| ------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------ |
+| 企画・要件（[concept.md](concept.md)）                        | 設計基準（S5 判断画面UI確定済）                 | `S6` で残り画面の確定事項を段階置換              |
+| システム構成（[architecture.md](architecture.md)）            | 構成基準（S0 検証・CI基盤・S5 UI試作実装済）    | `S1` でPulumi・D1・Domain実装                    |
+| データ・状態遷移（[data-and-state.md](data-and-state.md)）    | 設計基準（`selection_mode` 検証のみ S5 実装済） | `S1`〜`S3` でスキーマ・状態遷移を実装            |
+| Bot連携・状態設計（[bot-integration.md](bot-integration.md)） | 設計基準（未実装）                              | `S2`〜`S4` でMCP・Human API・接続実証を実施      |
+| 実装計画（[implementation-plan.md](implementation-plan.md)）  | 計画基準（S0・S5 実装済）                       | 次は `S1` または `S6` のGitHub Issueを起票し進行 |
+| AI開発フロー（本書）                                          | 運用基準（CI自動強制済）                        | 全変更に適用                                     |
+| GitHub Issues / CI Gate                                       | 有効（`enabled` / `ci.yml`）                    | 稼働中                                           |

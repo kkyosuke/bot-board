@@ -1,36 +1,39 @@
-export const ERROR_CODES = [
-  "VALIDATION_ERROR",
-  "NOT_AUTHORIZED",
-  "NOT_FOUND",
-  "IDEMPOTENCY_CONFLICT",
-  "VERSION_CONFLICT",
-  "LEASE_CONFLICT",
-  "GROUP_LOCKED",
-  "INVALID_TRANSITION",
-  "STALE_PROPOSAL",
-  "WORKSPACE_PAUSED",
-  "RATE_LIMITED",
-] as const;
-
-export type ErrorCode = (typeof ERROR_CODES)[number];
-
-export const BOT_SCOPES = [
-  "tasks:read",
-  "tasks:write",
-  "proposals:write",
-  "decisions:read",
-] as const;
-
-export type BotScope = (typeof BOT_SCOPES)[number];
-
-export class DomainError extends Error {
-  public readonly code: ErrorCode;
-  public readonly retryable: boolean;
-
-  public constructor(code: ErrorCode, message: string, retryable = false) {
-    super(message);
-    this.name = "DomainError";
-    this.code = code;
-    this.retryable = retryable;
-  }
-}
+export {
+  type ArtifactPreview,
+  BOARD_VIEW_STATES,
+  type BoardViewState,
+  buildAcceptPayload,
+  buildDeclinePayload,
+  CARD_TYPES,
+  type CardType,
+  DECISION_CARD_STATUSES,
+  type DecisionCardItem,
+  type DecisionCardStatus,
+  type DecisionFactor,
+  type DecisionOption,
+  type DecisionPayload,
+  getDefaultCheckedOptionIds,
+  getDefaultSelectedOptionId,
+  isBoardViewState,
+  SELECTION_MODES,
+  type SelectionMode,
+  validateDecisionPayload,
+} from "./decision-card";
+export { BOT_SCOPES, type BotScope, DomainError, ERROR_CODES, type ErrorCode } from "./errors";
+export {
+  computeSwipeVisuals,
+  DRAG_INTENT_THRESHOLD_PX,
+  type DragAxisLock,
+  EDGE_GUARD_PX,
+  isProtectedScreenEdge,
+  PROVISIONAL_UNDO_WINDOW_MS,
+  resolveDragAxis,
+  resolveSwipeOutcome,
+  SWIPE_COMMIT_DISTANCE_PX,
+  SWIPE_COMMIT_VELOCITY_PX_PER_MS,
+  SWIPE_FLICK_MIN_DISTANCE_PX,
+  SWIPE_MAX_ROTATION_DEG,
+  type SwipeOutcome,
+  type SwipeVisualState,
+  VERTICAL_LOCK_RATIO,
+} from "./swipe-gesture";

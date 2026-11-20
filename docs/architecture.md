@@ -1,6 +1,6 @@
 # システム構成・技術スタック仕様
 
-作成日：2026-11-18 ／ 状態：構成基準（S0 検証・CI基盤実装済 ／ 業務機能未実装）
+作成日：2026-11-18 ／ 状態：構成基準（S0 検証・CI基盤・S5 判断カードUI試作実装済 ／ バックエンド・Bot連携未実装）
 
 ## 1. 技術スタック
 
@@ -10,14 +10,14 @@
 | CI・機械的ガードレール  | **GitHub Actions** (`ci.yml`) + **Git Hooks** (`.githooks/pre-commit`) + `bunfig.toml` + `scripts/check-guardrails.ts` + **`main` Ruleset** | レイヤー越境遮断・型アサーション禁止・証票ブランド型・docs/強制先検査・`ci` Green 必須化を強制                      | 実装済（S0）           |
 | クラウド実行基盤        | **Cloudflare Workers**（Static Assets + HTTP + Queue Consumer + Cron）                                                                      | UI配信・Human API・MCP・ワーカー処理を単一プラットフォームで実行                                                    | 未実装                 |
 | IaC（構成管理）         | **Pulumi** (`@pulumi/cloudflare`, `runtime: bun`, `infra/`)                                                                                 | Workers・D1・Queues・QueueConsumer・Cron・Route をコード管理                                                        | 未実装                 |
-| Web UI                  | React + Vite + Tailwind CSS（Workers Static Assets 配信）                                                                                   | SP（360/320px基準）・PC対応のSPA（`/sign-in`・`/consent` 含む）                                                     | 未実装                 |
+| Web UI                  | React + Vite + Tailwind CSS（Workers Static Assets 配信）                                                                                   | SP（360/320px基準）・PC対応のSPA（判断カード画面実装済・モック接続、他画面・`/sign-in`・`/consent` は `S4`/`S6`）   | 一部実装済（S5）       |
 | HTTP API / ルーター     | **Hono**                                                                                                                                    | `/api/*`・`/.well-known/*` ルーティング、CSRF・認可ミドルウェア                                                     | 未実装                 |
 | MCP Server              | `@modelcontextprotocol/server`（MCP TypeScript SDK v2・Stateless Streamable HTTP）                                                          | `/api/mcp` でBot向け12ツールを公開                                                                                  | 未実装                 |
 | 入力検証                | `Zod`                                                                                                                                       | Human API と MCP JSON Schema の型・制約を共通化                                                                     | 未実装                 |
 | DB / ORM                | **Cloudflare D1**（SQLite互換）+ **Drizzle ORM**（`bun test` 時は `bun:sqlite`）                                                            | 条件付き原子更新・ガード付き `db.batch`・楽観ロック・冪等キー永続化                                                 | 未実装                 |
 | 非同期・5秒確定・Worker | **Cloudflare Queues**（`decision-finalize` / `bot-work` / `bot-work-dlq`）+ **Cron Triggers**                                               | 5秒仮確定の満了処理、判断確定イベントからの有界ステップ実行、期限切れ回収                                           | 未実装                 |
 | 認証・認可              | **Better Auth** (`better-auth` + Drizzle Adapter + `jwt` + `@better-auth/mcp`)                                                              | Human: `/api/auth/*` セッション認証<br>Bot: OAuth 2.1（`/.well-known/*` 公開）＋ `BotConnection` D1リアルタイム照合 | 証票型のみ実装済（S0） |
-| UI E2E検証              | Playwright（`bunx playwright test`）                                                                                                        | UI変更時のSP 360px/320px・PC代替操作・誤スワイプ防止検証                                                            | 未実装                 |
+| UI E2E検証              | Playwright（`bunx playwright test`）                                                                                                        | UI変更時のSP 360px/320px・PC代替操作・誤スワイプ防止検証                                                            | 実装済（S5：CI稼働中） |
 
 - 禁止：Bun外のフォーマッター・リンター・単体テストランナー（Prettier / ESLint / Biome / Vitest 等）を追加導入すること（強制: `tests/guardrails/repo-guardrails.test.ts`）
 - 禁止：Cloudflareリソースを手動変更のみで運用すること（`infra/` の Pulumi 定義を正とする）（強制: `S1予定`）
@@ -96,10 +96,10 @@ flowchart TD
 
 | パス                   | 責務                                                                                                                                        | 境界ガードレール                                                                                                          |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `src/client/`          | React + Tailwind CSS による4画面＋認証/同意画面（`/sign-in`, `/consent`）                                                                   | ドメイン遷移判定の重複実装禁止・`Bun` グローバル参照禁止                                                                  |
+| `src/client/`          | React + Tailwind CSS による判断カードUI（`api/` ポート・モック実装＋`components/`、他3画面・`/sign-in`・`/consent` は `S4`/`S6`）           | ドメイン遷移判定の重複実装禁止・`Bun` グローバル参照禁止                                                                  |
 | `src/server/routes/`   | Hono ルーター（`/api/auth/*`, `/.well-known/*`, `/api/human/*`, `/api/mcp`）                                                                | `/api/human/*` 更新系に `trustedOrigins` ベースのCSRF検証を必須化。`src/db` 直接参照禁止                                  |
 | `src/auth/`            | 証票ブランド型（`context.ts`）、発行隔離（`internal/`）、主体別検証入口（Human専用 `owner.ts` / Bot専用 `bot.ts`）、および Better Auth 設定 | `owner.ts` は Human Route のみ、`bot.ts` は MCP Route・Worker のみ import 許可（`bun lint` で強制）                       |
-| `src/domain/`          | `Task` / `DecisionCard` 状態遷移判定、版・期限チェック、エラーコード定義                                                                    | 外部I/O・DB・他層・DOM/`Bun` グローバルへの依存全面禁止（`bun lint` で強制）                                              |
+| `src/domain/`          | `selection_mode` ペイロード検証・スワイプ軸分離/閾値ルール（`S5` 実装済）、`Task` / `DecisionCard` 状態遷移・版検証（`S1`）                 | 外部I/O・DB・他層・DOM/`Bun` グローバルへの依存全面禁止（`bun lint` で強制）                                              |
 | `src/services/human/`  | 仮確定＋5秒遅延Queue投入、5秒取消、保留、タスク再試行、状況/履歴取得、接続管理                                                              | `OwnerContext` 必須・Bot/System/Adapter/Worker/MCPからのimport禁止（`bun lint` で強制）                                   |
 | `src/services/bot/`    | タスク・成果操作、占有取得・延長、提案一括登録・差替、確定判断取得、結果記録                                                                | `VerifiedBotContext`（D1照合・`oauth_client_id` 一致済）・`workspace_id`・`scopes`・`expected_version`・`request_id` 必須 |
 | `src/services/system/` | 5秒猶予満了の確定処理（Queue・Cron・読取時オンデマンド共通）、期限切れ整理、DLQ失敗遷移                                                     | 冪等設計必須・`services/human` 参照禁止                                                                                   |
@@ -122,8 +122,9 @@ flowchart TD
 | `bun check`                | `tsconfig.json`（TS7 strict群 + Unique Symbol 証票ブランド型）による全層型検査                                                         | エラー 0                    | 稼働中（CI + `main` Ruleset） |
 | `bun run check:guardrails` | `scripts/check-guardrails.ts`（`禁止：` 強制先タグ実在・相対リンク・Mermaid構文・経緯見出し・未実証 `対応済` 検査）                    | エラー 0                    | 稼働中（CI + `main` Ruleset） |
 | `bun test`                 | `tests/guardrails/`（禁止依存・シングルトン不在・Lint境界実働検証・docs/証票/ロガー検査）および単体/結合テスト                         | 全件 Pass                   | 稼働中（CI + `main` Ruleset） |
+| `bun run build`            | `vite build` による Web UI プロダクションバンドル検証（`dist/client/`）                                                                | エラー 0                    | 稼働中（CI + `main` Ruleset） |
+| `bun run test:e2e`         | `bunx playwright test`（SP 360px/320px・PCボタン/キーボード・2択/単一複数択/複数チェック・5秒取消・誤スワイプ防止）                    | 全件 Pass                   | 稼働中（CI + `main` Ruleset） |
 | `bun run infra:preview`    | `pulumi preview` による Cloudflare 構成差分の検証                                                                                      | エラー 0（`infra/` 変更時） | `S1` で追加                   |
-| `bun run test:e2e`         | `bunx playwright test`（SP 360px/320px・PCボタン/キーボード・誤スワイプ防止）                                                          | 全件 Pass（UI変更時）       | `S4`〜`S5` で追加             |
 
 - 禁止：型アサーション（`as`）や `src/` 内の `@ts-expect-error` を用いて型検査・証票型をバイパスすること（`consistent-type-assertions = "never"`・`ban-ts-comment` で遮断）（強制: `bunfig.toml`）
 - 禁止：不要な `eslint-disable` コメントを残すこと（`reportUnusedDisableDirectives = "error"` で遮断）（強制: `bunfig.toml`）

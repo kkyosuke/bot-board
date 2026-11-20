@@ -252,4 +252,39 @@ describe("documentation and guardrail ratchet checker", () => {
     ).toBe(true);
     expect(report.errors.some((e) => e.includes("before Slice S4 is implemented"))).toBe(true);
   });
+
+  test("rejects AC mismatch between implementation-plan.md §2 slice rows and §3 AC trace table", () => {
+    const report = createMinimalDocsRepo((root) => {
+      writeFileSync(
+        join(root, "docs", "implementation-plan.md"),
+        [
+          "# Plan",
+          "",
+          "| Slice | Phase | スコープ | UI Artifact | 主な検証対象 | 状態 |",
+          "| --- | --- | --- | --- | --- | --- |",
+          "| **S0** | Phase 1 | Guardrails | 不要 | CI | **実装済** |",
+          "| **S1** | Phase 1 | DB | 不要 | `DEC-04` | 未着手 |",
+          "| **S2** | Phase 1 | Bot | 不要 | test | 未着手 |",
+          "| **S3** | Phase 1 | Human | 不要 | `DEC-04` | 未着手 |",
+          "| **S4** | Phase 1 | OAuth | 必須 | MCP | 未着手 |",
+          "| **S5** | Phase 2 | Card UI | 必須 | `UX-01`〜`02`, `DEC-04` | **実装済** |",
+          "| **S6** | Phase 2 | Board UI | 必須 | E2E | 未着手 |",
+          "| **S7** | Phase 3 | Worker | 不要 | test | 未着手 |",
+          "| **S8** | Phase 3 | Full E2E | 変更時のみ | E2E | 未着手 |",
+          "",
+          "| AC ID | 要件 | 実装スライス | 最終E2E検証 |",
+          "| --- | --- | --- | --- |",
+          "| `UX-01` | Swipe | S5 | S8 |",
+          "| `UX-02` | SP/PC | S5 | S8 |",
+          "| `DEC-04` | Group lock | S1, S3 | S8 |",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    expect(report.ok).toBe(false);
+    expect(
+      report.errors.some((e) => e.includes('Slice S5 claims AC "DEC-04"') && e.includes("S5")),
+    ).toBe(true);
+  });
 });
