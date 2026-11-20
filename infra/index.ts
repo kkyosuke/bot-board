@@ -9,18 +9,115 @@ const config = new pulumi.Config("bot-board");
 const stack = pulumi.getStack();
 const isProd = stack === "prod";
 
-const accountId = config.require("accountId");
-const appEnv = config.get("appEnv") ?? stack;
-const betterAuthUrl = config.require("betterAuthUrl");
-const trustedOrigins = config.get("trustedOrigins") ?? betterAuthUrl;
-const ownerGithubId = config.require("ownerGithubId");
+function getPlainConfig(configKey: string, envKey: string): string | undefined {
+  const fromConfig = config.get(configKey)?.trim();
+  if (fromConfig !== undefined && fromConfig !== "") {
+    return fromConfig;
+  }
+  const fromEnv = process.env[envKey]?.trim();
+  return fromEnv !== undefined && fromEnv !== "" ? fromEnv : undefined;
+}
 
-const betterAuthSecret = config.requireSecret("betterAuthSecret");
-const githubClientId = config.requireSecret("githubClientId");
-const githubClientSecret = config.requireSecret("githubClientSecret");
-const xaiApiKey = isProd ? config.requireSecret("xaiApiKey") : config.getSecret("xaiApiKey");
-const xaiModel = config.get("xaiModel");
-const xaiApiUrl = config.get("xaiApiUrl");
+function requirePlainConfig(configKey: string, envKey: string): string {
+  const value = getPlainConfig(configKey, envKey);
+  if (value === undefined) {
+    throw new Error(
+      `Missing required configuration: set Pulumi config "bot-board:${configKey}" or env "${envKey}".`,
+    );
+  }
+  return value;
+}
+
+function getSecretConfig(configKey: string, envKey: string): pulumi.Output<string> | undefined {
+  const fromConfig = config.getSecret(configKey);
+  if (fromConfig !== undefined) {
+    return fromConfig;
+  }
+  const fromEnv = process.env[envKey]?.trim();
+  if (fromEnv !== undefined && fromEnv !== "") {
+    return pulumi.secret(fromEnv);
+  }
+  return undefined;
+}
+
+function requireSecretConfig(configKey: string, envKey: string): pulumi.Output<string> {
+  const value = getSecretConfig(configKey, envKey);
+  if (value === undefined) {
+    throw new Error(
+      `Missing required secret: set Pulumi secret "bot-board:${configKey}" or GitHub/env secret "${envKey}".`,
+    );
+  }
+  return value;
+}
+
+const accountId = requirePlainConfig("accountId", "CLOUDFLARE_ACCOUNT_ID");
+const appEnv = config.get("appEnv") ?? stack;
+const betterAuthUrl = requirePlainConfig("betterAuthUrl", "BETTER_AUTH_URL");
+const trustedOrigins = getPlainConfig("trustedOrigins", "TRUSTED_ORIGINS") ?? betterAuthUrl;
+const ownerGithubId = requirePlainConfig("ownerGithubId", "OWNER_GITHUB_ID");
+
+const rawBetterAuthSecretEnv = process.env["BETTER_AUTH_SECRET"]?.trim() ?? "";
+if (
+  config.getSecret("betterAuthSecret") === undefined &&
+  rawBetterAuthSecretEnv !== "" &&
+  rawBetterAuthSecretEnv.length < 16
+) {
+  throw new Error(
+    "Invalid BETTER_AUTH_SECRET: must be at least 16 characters (use `openssl rand -base64 32`).",
+  );
+}
+const betterAuthSecret = requireSecretConfig("betterAuthSecret", "BETTER_AUTH_SECRET");
+const githubClientId = requireSecretConfig("githubClientId", "GITHUB_CLIENT_ID");
+const githubClientSecret = requireSecretConfig("githubClientSecret", "GITHUB_CLIENT_SECRET");
+
+const VALID_WORKER_LLM_PROVIDERS = ["grok", "gemini", "meta-muse"] as const;
+const workerLlmProviderRaw = getPlainConfig(
+  "workerLlmProvider",
+  "WORKER_LLM_PROVIDER",
+)?.toLowerCase();
+if (
+  workerLlmProviderRaw !== undefined &&
+  !VALID_WORKER_LLM_PROVIDERS.some((provider) => provider === workerLlmProviderRaw)
+) {
+  throw new Error(
+    `Invalid bot-board:workerLlmProvider ("${workerLlmProviderRaw}"): must be one of ${VALID_WORKER_LLM_PROVIDERS.join(", ")}.`,
+  );
+}
+
+const xaiApiKeyCandidate = getSecretConfig("xaiApiKey", "XAI_API_KEY");
+const geminiApiKeyCandidate = getSecretConfig("geminiApiKey", "GEMINI_API_KEY");
+const metaModelApiKeyCandidate = getSecretConfig("metaModelApiKey", "META_MODEL_API_KEY");
+
+const effectiveWorkerLlmProvider =
+  workerLlmProviderRaw ??
+  (xaiApiKeyCandidate !== undefined
+    ? "grok"
+    : geminiApiKeyCandidate !== undefined
+      ? "gemini"
+      : metaModelApiKeyCandidate !== undefined
+        ? "meta-muse"
+        : "grok");
+
+const xaiApiKey =
+  isProd && effectiveWorkerLlmProvider === "grok"
+    ? requireSecretConfig("xaiApiKey", "XAI_API_KEY")
+    : xaiApiKeyCandidate;
+const xaiModel = getPlainConfig("xaiModel", "XAI_MODEL");
+const xaiApiUrl = getPlainConfig("xaiApiUrl", "XAI_API_URL");
+
+const geminiApiKey =
+  isProd && effectiveWorkerLlmProvider === "gemini"
+    ? requireSecretConfig("geminiApiKey", "GEMINI_API_KEY")
+    : geminiApiKeyCandidate;
+const geminiModel = getPlainConfig("geminiModel", "GEMINI_MODEL");
+const geminiApiUrl = getPlainConfig("geminiApiUrl", "GEMINI_API_URL");
+
+const metaModelApiKey =
+  isProd && effectiveWorkerLlmProvider === "meta-muse"
+    ? requireSecretConfig("metaModelApiKey", "META_MODEL_API_KEY")
+    : metaModelApiKeyCandidate;
+const metaModel = getPlainConfig("metaModel", "META_MODEL");
+const metaApiUrl = getPlainConfig("metaApiUrl", "META_API_URL");
 
 const rateLimitRequests = config.getNumber("rateLimitRequests") ?? 120;
 const rateLimitPeriodSeconds = config.getNumber("rateLimitPeriodSeconds") ?? 60;
@@ -28,9 +125,9 @@ const rateLimitNamespaceId = config.require("rateLimitNamespaceId");
 const workerCpuMsLimit = config.getNumber("workerCpuMsLimit") ?? 10_000;
 const enableWorkersDev = config.getBoolean("enableWorkersDev") ?? !isProd;
 
-const zoneId = config.get("zoneId");
-const hostname = config.get("hostname");
-const routePattern = config.get("routePattern");
+const zoneId = getPlainConfig("zoneId", "CLOUDFLARE_ZONE_ID");
+const hostname = getPlainConfig("hostname", "CUSTOM_HOSTNAME");
+const routePattern = getPlainConfig("routePattern", "ROUTE_PATTERN");
 
 // Validate critical production configuration before planning/applying Cloudflare resources
 if (rateLimitPeriodSeconds !== 10 && rateLimitPeriodSeconds !== 60) {
@@ -238,6 +335,13 @@ const workerBindings: pulumi.Input<cloudflare.types.input.WorkersScriptBinding>[
   },
 ];
 
+if (workerLlmProviderRaw !== undefined && workerLlmProviderRaw !== "") {
+  workerBindings.push({
+    type: "plain_text",
+    name: "WORKER_LLM_PROVIDER",
+    text: workerLlmProviderRaw,
+  });
+}
 if (xaiApiKey !== undefined) {
   workerBindings.push({
     type: "secret_text",
@@ -257,6 +361,48 @@ if (xaiApiUrl !== undefined && xaiApiUrl.trim() !== "") {
     type: "plain_text",
     name: "XAI_API_URL",
     text: xaiApiUrl.trim(),
+  });
+}
+if (geminiApiKey !== undefined) {
+  workerBindings.push({
+    type: "secret_text",
+    name: "GEMINI_API_KEY",
+    text: geminiApiKey,
+  });
+}
+if (geminiModel !== undefined && geminiModel.trim() !== "") {
+  workerBindings.push({
+    type: "plain_text",
+    name: "GEMINI_MODEL",
+    text: geminiModel.trim(),
+  });
+}
+if (geminiApiUrl !== undefined && geminiApiUrl.trim() !== "") {
+  workerBindings.push({
+    type: "plain_text",
+    name: "GEMINI_API_URL",
+    text: geminiApiUrl.trim(),
+  });
+}
+if (metaModelApiKey !== undefined) {
+  workerBindings.push({
+    type: "secret_text",
+    name: "META_MODEL_API_KEY",
+    text: metaModelApiKey,
+  });
+}
+if (metaModel !== undefined && metaModel.trim() !== "") {
+  workerBindings.push({
+    type: "plain_text",
+    name: "META_MODEL",
+    text: metaModel.trim(),
+  });
+}
+if (metaApiUrl !== undefined && metaApiUrl.trim() !== "") {
+  workerBindings.push({
+    type: "plain_text",
+    name: "META_API_URL",
+    text: metaApiUrl.trim(),
   });
 }
 

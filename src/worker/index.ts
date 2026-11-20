@@ -12,8 +12,14 @@ import { z } from "zod";
 import {
   assertModelTimeoutWithinLease,
   type BoundedModelStepOptions,
+  createGeminiModelAdapter,
   createGrokModelAdapter,
+  createMetaMuseModelAdapter,
   type ModelAdapter,
+  ModelAdapterError,
+  parseWorkerLlmProvider,
+  WORKER_LLM_PROVIDERS,
+  type WorkerLlmProvider,
 } from "@/adapters";
 import { createLazyOAuthJwtVerifierFromD1 } from "@/auth/better-auth";
 import {
@@ -83,9 +89,16 @@ export interface WorkerRuntimeEnv {
   readonly GITHUB_CLIENT_ID?: string;
   readonly GITHUB_CLIENT_SECRET?: string;
   readonly OWNER_GITHUB_ID?: string;
+  readonly WORKER_LLM_PROVIDER?: string;
   readonly XAI_API_KEY?: string;
   readonly XAI_MODEL?: string;
   readonly XAI_API_URL?: string;
+  readonly GEMINI_API_KEY?: string;
+  readonly GEMINI_MODEL?: string;
+  readonly GEMINI_API_URL?: string;
+  readonly META_MODEL_API_KEY?: string;
+  readonly META_MODEL?: string;
+  readonly META_API_URL?: string;
   readonly MODEL_ADAPTER?: ModelAdapter;
   readonly APP_ENV?: string;
 }
@@ -142,16 +155,81 @@ export interface DecisionFinalizeBatchEnv {
 
 export interface BotWorkBatchEnv {
   readonly DB: D1LikeDatabase;
+  readonly WORKER_LLM_PROVIDER?: string;
   readonly XAI_API_KEY?: string;
   readonly XAI_MODEL?: string;
   readonly XAI_API_URL?: string;
+  readonly GEMINI_API_KEY?: string;
+  readonly GEMINI_MODEL?: string;
+  readonly GEMINI_API_URL?: string;
+  readonly META_MODEL_API_KEY?: string;
+  readonly META_MODEL?: string;
+  readonly META_API_URL?: string;
   readonly MODEL_ADAPTER?: ModelAdapter;
 }
 
-function resolveWorkerModelAdapter(env: BotWorkBatchEnv): ModelAdapter {
+function createInvalidProviderAdapter(): ModelAdapter {
+  return {
+    name: "invalid-provider",
+    executeStep(_context, options) {
+      assertModelTimeoutWithinLease(options);
+      return Promise.reject(
+        new ModelAdapterError(
+          "permanent",
+          "BAD_REQUEST",
+          `Unsupported WORKER_LLM_PROVIDER configuration. Expected one of: ${WORKER_LLM_PROVIDERS.join(", ")}.`,
+        ),
+      );
+    },
+  };
+}
+
+function selectAutoDetectedProvider(env: BotWorkBatchEnv): WorkerLlmProvider {
+  if ((env.XAI_API_KEY?.trim() ?? "") !== "") {
+    return "grok";
+  }
+  if ((env.GEMINI_API_KEY?.trim() ?? "") !== "") {
+    return "gemini";
+  }
+  if ((env.META_MODEL_API_KEY?.trim() ?? "") !== "") {
+    return "meta-muse";
+  }
+  return "grok";
+}
+
+export function resolveWorkerModelAdapter(env: BotWorkBatchEnv): ModelAdapter {
   if (env.MODEL_ADAPTER !== undefined) {
     return env.MODEL_ADAPTER;
   }
+
+  const rawProvider = env.WORKER_LLM_PROVIDER?.trim() ?? "";
+  let provider: WorkerLlmProvider;
+  if (rawProvider !== "") {
+    const parsed = parseWorkerLlmProvider(rawProvider);
+    if (parsed === null) {
+      return createInvalidProviderAdapter();
+    }
+    provider = parsed;
+  } else {
+    provider = selectAutoDetectedProvider(env);
+  }
+
+  if (provider === "gemini") {
+    return createGeminiModelAdapter({
+      apiKey: env.GEMINI_API_KEY ?? "",
+      ...(env.GEMINI_API_URL !== undefined ? { endpointUrl: env.GEMINI_API_URL } : {}),
+      ...(env.GEMINI_MODEL !== undefined ? { model: env.GEMINI_MODEL } : {}),
+    });
+  }
+
+  if (provider === "meta-muse") {
+    return createMetaMuseModelAdapter({
+      apiKey: env.META_MODEL_API_KEY ?? "",
+      ...(env.META_API_URL !== undefined ? { endpointUrl: env.META_API_URL } : {}),
+      ...(env.META_MODEL !== undefined ? { model: env.META_MODEL } : {}),
+    });
+  }
+
   return createGrokModelAdapter({
     apiKey: env.XAI_API_KEY ?? "",
     ...(env.XAI_API_URL !== undefined ? { endpointUrl: env.XAI_API_URL } : {}),

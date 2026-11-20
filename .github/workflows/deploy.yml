@@ -50,14 +50,38 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run full verification gate before deploy
         run: bun run verify
-      - name: Deploy Cloudflare Worker, apply remote D1 migrations, and verify smoke checks
+      - name: Deploy Cloudflare Worker, sync Cloudflare Secrets, apply remote D1 migrations, and verify smoke checks
         env:
+          # Deployment & Pulumi state secrets (strictly from GitHub Secrets)
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
           PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           SMOKE_BOT_TOKEN: ${{ secrets.SMOKE_BOT_TOKEN }}
+          # Cloudflare Worker Secrets synced via Pulumi secret_text (strictly from GitHub Secrets)
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+          # Non-secret environment config (reads GitHub Environment Variables first, falls back to Secrets)
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BETTER_AUTH_URL: ${{ vars.BETTER_AUTH_URL || secrets.BETTER_AUTH_URL }}
+          TRUSTED_ORIGINS: ${{ vars.TRUSTED_ORIGINS || secrets.TRUSTED_ORIGINS }}
+          OWNER_GITHUB_ID: ${{ vars.OWNER_GITHUB_ID || secrets.OWNER_GITHUB_ID }}
+          WORKER_LLM_PROVIDER: ${{ vars.WORKER_LLM_PROVIDER || secrets.WORKER_LLM_PROVIDER }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL }}
+          GEMINI_API_URL: ${{ vars.GEMINI_API_URL || secrets.GEMINI_API_URL }}
+          XAI_MODEL: ${{ vars.XAI_MODEL || secrets.XAI_MODEL }}
+          XAI_API_URL: ${{ vars.XAI_API_URL || secrets.XAI_API_URL }}
+          META_MODEL: ${{ vars.META_MODEL || secrets.META_MODEL }}
+          META_API_URL: ${{ vars.META_API_URL || secrets.META_API_URL }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID || secrets.CLOUDFLARE_ZONE_ID }}
+          CUSTOM_HOSTNAME: ${{ vars.CUSTOM_HOSTNAME || secrets.CUSTOM_HOSTNAME }}
+          ROUTE_PATTERN: ${{ vars.ROUTE_PATTERN || secrets.ROUTE_PATTERN }}
         run: |
           if [ "${{ inputs.skip_smoke }}" = "true" ]; then
             bun run deploy -- --stack "${{ inputs.stack }}" --skip-smoke

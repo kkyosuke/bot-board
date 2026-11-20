@@ -1,6 +1,6 @@
 # Bot連携・状態設計
 
-作成日：2026-11-18 ／ 状態：実装基準（S2 `/api/mcp` 12ツール・S3 Human API・5秒確定・S4 OAuth 2.1/DCR/同意UI・S7 自律ワーカー/Cron/Grokアダプター コード実装済 ／ 検証環境デプロイ・実機実証 未実施）
+作成日：2026-11-18 ／ 状態：実装基準（S2 `/api/mcp` 12ツール・S3 Human API・5秒確定・S4 OAuth 2.1/DCR/同意UI・S7 自律ワーカー/Cron/マルチプロバイダアダプター（Grok・Google Gemini・Meta Muse） コード実装済 ／ 検証環境デプロイ・実機実証 未実施）
 
 [企画・要件書](concept.md)の「Botが管理し、人はスワイプで選択する」を実現するための構成。仕様名・操作名は本アプリの提案であり、各社製品の既存API名ではない。
 
@@ -8,14 +8,15 @@
 
 共通の業務処理をHTTP APIとMCPから呼べるようにする。MCPはBotへ操作の名前・引数・結果を伝える接続方式。Botごとに別のタスク管理機能を作らず、権限と状態遷移を共通化する。
 
-| 対象    | 公式情報で確認した範囲                                       | 本アプリでの連携案・未確認事項                                                  |
-| ------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| ChatGPT | HTTPS上の独自MCPサーバーを接続し、ツールを使う公式手順がある | MCPでタスクとカードを操作。対象アカウント・SP/PCでの設定と利用を実機確認する    |
-| Claude  | remote MCPのカスタムコネクターがある。接続元はクラウド側     | 同じMCPを利用。認証とSP/PCでの往復操作を実機確認する                            |
-| Grok    | xAI APIのremote MCP toolsで外部MCPを指定できる               | APIワーカー経由を候補とする。一般向けGrokアプリからの直接接続は本調査では未確認 |
-| Muse    | 正式なサービスを特定できていない                             | 名称・URLを確認してからMCP、HTTP API等の対応を調べる。対応可能とは断定しない    |
+| 対象          | 公式情報で確認した範囲                                                                                                                  | 本アプリでの連携案・未確認事項                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ChatGPT       | HTTPS上の独自MCPサーバーを接続し、ツールを使う公式手順がある                                                                            | Remote MCP（`/api/mcp` + OAuth 2.1）でタスクとカードを操作。対象アカウント・SP/PCでの設定と利用を実機確認する（`#17`）                                |
+| Claude        | Remote MCPのカスタムコネクターがある。接続元はクラウド側                                                                                | 同じMCPを利用。認証とSP/PCでの往復操作を実機確認する（`#20`）                                                                                         |
+| Meta Muse     | MetaのパーソナルAIエージェント（`https://ai.meta.com/muse/`）。Custom Connector（Remote MCP + OAuth 2.1 / DCR）と Meta Model API を提供 | 公式チャットは Remote MCP Custom Connector（`/api/mcp`）、自律再開は Meta Model API（`src/adapters/meta-muse.ts`）で連携。実機往復を検証する（`#33`） |
+| Google Gemini | Gemini Web/App Custom Apps（`HEAD /api/mcp` 401発見 + OAuth 2.1）、Gemini CLI、Gemini Enterprise、および Gemini Developer API を提供    | 公式チャット/CLI/Enterprise は Remote MCP（`/api/mcp`）、自律再開は Gemini API（`src/adapters/gemini.ts`）で連携。実機往復を検証する（`#34`）         |
+| Grok          | xAI APIのremote MCP toolsで外部MCPを指定できる                                                                                          | APIワーカー経由（`src/adapters/grok.ts`）を候補とする。一般向けGrokアプリからの直接接続は本調査では未確認（`#18`）                                    |
 
-根拠：[OpenAIのMCP接続手順](https://developers.openai.com/plugins/build/app-quickstart)、[Claudeのremote MCP案内](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)、[xAIのremote MCP tools](https://docs.x.ai/developers/tools/remote-mcp)。2026-11-18に参照。上表は文書上の機能確認であり、このアプリとの接続成功を意味しない。
+根拠：[OpenAIのMCP接続手順](https://developers.openai.com/plugins/build/app-quickstart)、[Claudeのremote MCP案内](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)、[Meta Muse](https://ai.meta.com/muse/) / [Meta Model API](https://dev.meta.ai/docs/overview)、[Gemini CLI MCP](https://geminicli.com/docs/tools/mcp-server/) / [Gemini Enterprise Custom MCP](https://docs.cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server) / [Gemini API OpenAI互換](https://aistudio.google.com/docs/openai)、[xAIのremote MCP tools](https://docs.x.ai/developers/tools/remote-mcp)。2026-11-20に参照。上表は文書上の機能確認であり、このアプリとの接続成功を意味しない。
 
 ### 「接続できる」と「自動で動き続ける」を区別する
 
@@ -145,11 +146,12 @@ MVPの処理対象はタスク管理・調査・下書き・成果登録。将�
 
 ## 8. 接続実証と完了基準
 
-| 経路                    | 実証項目                                                        | 現在   |
-| ----------------------- | --------------------------------------------------------------- | ------ |
-| ChatGPT公式クライアント | 認証→検索→タスク作成→カード提出→確定結果取得。SP/PCの可否を記録 | 未実施 |
-| Claude公式クライアント  | 同上。接続元からサーバーへ到達できることも確認                  | 未実施 |
-| Grok APIワーカー        | 同上に加え、人の判断後に追加チャット入力なしで再開              | 未実施 |
-| Muse                    | サービス特定→連携方式の確認→同じ操作契約を検証                  | 未特定 |
+| 経路                                             | 実証項目                                                                                                   | 現在   |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | ------ |
+| ChatGPT公式クライアント                          | 認証→検索→タスク作成→カード提出→確定結果取得。SP/PCの可否を記録（`#17`）                                   | 未実施 |
+| Claude公式クライアント                           | 同上。接続元からサーバーへ到達できることも確認（`#20`）                                                    | 未実施 |
+| Meta Muse（Custom Connector / Meta Model API）   | OAuth 2.1（DCR + `refresh_token`）でのMCP往復、および `META_MODEL_API_KEY` ワーカー自動再開を確認（`#33`） | 未実施 |
+| Google Gemini（Web/CLI/Enterprise / Gemini API） | `HEAD /api/mcp` 発見 + OAuth 2.1でのMCP往復、および `GEMINI_API_KEY` ワーカー自動再開を確認（`#34`）       | 未実施 |
+| Grok APIワーカー                                 | 同上に加え、`XAI_API_KEY` ワーカーで人の判断後に追加チャット入力なしで再開（`#18`）                        | 未実施 |
 
 共通で、認証失効、別ワークスペースへのアクセス拒否、二重要求、同時採用、取り消しとの競合、期限切れ、実行中クラッシュを検証する。公式チャット、APIワーカー、SP、PCの結果を分けて記録し、未確認の経路を対応済みにしない。

@@ -14,6 +14,118 @@ const stackOutputsSchema = z.object({
   publicUrl: z.string().url(),
 });
 
+const STRIP_WHEN_EMPTY_ENV_KEYS = [
+  "PULUMI_CONFIG_PASSPHRASE",
+  "PULUMI_CONFIG_PASSPHRASE_FILE",
+  "PULUMI_ACCESS_TOKEN",
+  "PULUMI_BACKEND_URL",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+] as const;
+
+export function isSelfHostedPulumiBackend(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim().toLowerCase();
+  if (trimmed === "") {
+    return false;
+  }
+  return !trimmed.startsWith("https://") && !trimmed.startsWith("http://");
+}
+
+export function buildPulumiCommandEnv(
+  baseEnv: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  const stripSet = new Set<string>(STRIP_WHEN_EMPTY_ENV_KEYS);
+
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (stripSet.has(key) && value.trim() === "") {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+
+  const backendUrl = sanitized["PULUMI_BACKEND_URL"]?.trim() ?? "";
+  if (backendUrl !== "" && isSelfHostedPulumiBackend(backendUrl)) {
+    const passphrase = sanitized["PULUMI_CONFIG_PASSPHRASE"]?.trim() ?? "";
+    const passphraseFile = sanitized["PULUMI_CONFIG_PASSPHRASE_FILE"]?.trim() ?? "";
+    if (passphrase === "" && passphraseFile === "") {
+      throw new Error(
+        "Refusing to deploy with a self-hosted PULUMI_BACKEND_URL without a non-empty PULUMI_CONFIG_PASSPHRASE or PULUMI_CONFIG_PASSPHRASE_FILE (prevents silent empty-passphrase secret encryption).",
+      );
+    }
+  }
+
+  return sanitized;
+}
+
+export function redactSecretFromText(rawText: string, secretValue: string): string {
+  const trimmedSecret = secretValue.trim();
+  let output = rawText;
+  if (trimmedSecret !== "") {
+    output = output.split(trimmedSecret).join("<REDACTED>");
+  }
+  return output.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)'"]+/gi, "<REDACTED_URL>");
+}
+
+export interface PulumiLoginSpawnResult {
+  readonly exitCode: number;
+  readonly stderrText: string;
+}
+
+export type PulumiLoginSpawner = (
+  cmd: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly env: Record<string, string>;
+  },
+) => PulumiLoginSpawnResult;
+
+function defaultPulumiLoginSpawner(
+  cmd: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly env: Record<string, string>;
+  },
+): PulumiLoginSpawnResult {
+  const proc = Bun.spawnSync([...cmd], {
+    cwd: options.cwd,
+    env: options.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: proc.exitCode,
+    stderrText: proc.stderr.toString(),
+  };
+}
+
+export function runPulumiLogin(
+  pulumiBin: string,
+  infraDir: string,
+  pulumiEnv: Record<string, string>,
+  spawner: PulumiLoginSpawner = defaultPulumiLoginSpawner,
+): void {
+  const backendUrl = pulumiEnv["PULUMI_BACKEND_URL"]?.trim() ?? "";
+  if (backendUrl === "") {
+    return;
+  }
+  // Never pass PULUMI_BACKEND_URL via argv or inherited stdio; Pulumi reads it from child env safely.
+  const result = spawner([pulumiBin, "login", "--non-interactive"], {
+    cwd: infraDir,
+    env: pulumiEnv,
+  });
+  if (result.exitCode !== 0) {
+    const safeDetail = redactSecretFromText(result.stderrText.trim(), backendUrl);
+    throw new Error(
+      `Command failed (exit ${result.exitCode}): pulumi login --non-interactive${safeDetail !== "" ? ` (${safeDetail})` : ""}`,
+    );
+  }
+}
+
 function readCliFlag(args: readonly string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
   if (idx === -1) {
@@ -22,21 +134,43 @@ function readCliFlag(args: readonly string[], flag: string): string | undefined 
   return args[idx + 1];
 }
 
-function runCommandOrThrow(cmd: readonly string[], cwd: string): void {
+function runCommandOrThrow(
+  cmd: readonly string[],
+  cwd: string,
+  env?: Record<string, string>,
+  safeLabel?: string,
+): void {
   const result = Bun.spawnSync([...cmd], {
     cwd,
+    ...(env !== undefined ? { env } : {}),
     stdio: ["inherit", "inherit", "inherit"],
   });
   if (result.exitCode !== 0) {
-    throw new Error(`Command failed (exit ${result.exitCode}): ${cmd.join(" ")}`);
+    throw new Error(`Command failed (exit ${result.exitCode}): ${safeLabel ?? cmd.join(" ")}`);
   }
 }
 
-function readPulumiOutputs(repoRoot: string, pulumiBin: string, stack: string) {
+function readPulumiOutputs(
+  repoRoot: string,
+  pulumiBin: string,
+  stack: string,
+  pulumiEnv: Record<string, string>,
+) {
   const proc = Bun.spawnSync(
-    [pulumiBin, "stack", "output", "--cwd", resolve(repoRoot, "infra"), "--stack", stack, "--json"],
+    [
+      pulumiBin,
+      "stack",
+      "output",
+      "--cwd",
+      resolve(repoRoot, "infra"),
+      "--stack",
+      stack,
+      "--json",
+      "--non-interactive",
+    ],
     {
       cwd: repoRoot,
+      env: pulumiEnv,
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -56,8 +190,13 @@ function readPulumiOutputs(repoRoot: string, pulumiBin: string, stack: string) {
   return parsed.data;
 }
 
-function resolveCloudflareAccountId(repoRoot: string, pulumiBin: string, stack: string): string {
-  const fromEnv = process.env["CLOUDFLARE_ACCOUNT_ID"]?.trim() ?? "";
+function resolveCloudflareAccountId(
+  repoRoot: string,
+  pulumiBin: string,
+  stack: string,
+  pulumiEnv: Record<string, string>,
+): string {
+  const fromEnv = pulumiEnv["CLOUDFLARE_ACCOUNT_ID"]?.trim() ?? "";
   if (fromEnv !== "") {
     return fromEnv;
   }
@@ -71,9 +210,11 @@ function resolveCloudflareAccountId(repoRoot: string, pulumiBin: string, stack: 
       resolve(repoRoot, "infra"),
       "--stack",
       stack,
+      "--non-interactive",
     ],
     {
       cwd: repoRoot,
+      env: pulumiEnv,
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -108,6 +249,7 @@ async function main(): Promise<void> {
     throw new Error("CLOUDFLARE_API_TOKEN must be set before running deploy.");
   }
 
+  const pulumiEnv = buildPulumiCommandEnv(process.env);
   const repoRoot = resolve(import.meta.dirname, "..");
 
   process.stdout.write(`==> [1/4] Building client, worker, and Pulumi entrypoint (${stack})...\n`);
@@ -115,23 +257,26 @@ async function main(): Promise<void> {
   runCommandOrThrow([process.execPath, "run", "build:worker"], repoRoot);
   runCommandOrThrow([process.execPath, "run", "build:infra"], repoRoot);
 
-  process.stdout.write(`==> [2/4] Deploying Cloudflare resources via Pulumi (${stack})...\n`);
+  const infraDir = resolve(repoRoot, "infra");
+  if ((pulumiEnv["PULUMI_BACKEND_URL"]?.trim() ?? "") !== "") {
+    process.stdout.write("==> [2/4] Logging into configured Pulumi backend...\n");
+    runPulumiLogin(pulumiBin, infraDir, pulumiEnv);
+  }
+
+  process.stdout.write(`==> [2/4] Selecting/creating Pulumi stack (${stack}) and deploying...\n`);
   runCommandOrThrow(
-    [
-      pulumiBin,
-      "up",
-      "--cwd",
-      resolve(repoRoot, "infra"),
-      "--stack",
-      stack,
-      "--yes",
-      "--non-interactive",
-    ],
+    [pulumiBin, "stack", "select", "--create", stack, "--cwd", infraDir, "--non-interactive"],
     repoRoot,
+    pulumiEnv,
+  );
+  runCommandOrThrow(
+    [pulumiBin, "up", "--cwd", infraDir, "--stack", stack, "--yes", "--non-interactive"],
+    repoRoot,
+    pulumiEnv,
   );
 
-  const outputs = readPulumiOutputs(repoRoot, pulumiBin, stack);
-  const accountId = resolveCloudflareAccountId(repoRoot, pulumiBin, stack);
+  const outputs = readPulumiOutputs(repoRoot, pulumiBin, stack, pulumiEnv);
+  const accountId = resolveCloudflareAccountId(repoRoot, pulumiBin, stack, pulumiEnv);
 
   process.stdout.write(`==> [3/4] Applying remote D1 migrations (${outputs.d1DatabaseUuid})...\n`);
   const migrations = loadDiskMigrations(resolve(repoRoot, "src", "db", "migrations"));

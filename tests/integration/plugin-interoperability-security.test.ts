@@ -244,7 +244,9 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
       );
       expect(optRes.status).toBe(204);
       expect(optRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
-      expect(optRes.headers.get("Access-Control-Allow-Methods")).toBe("GET, POST, DELETE, OPTIONS");
+      expect(optRes.headers.get("Access-Control-Allow-Methods")).toBe(
+        "GET, HEAD, POST, DELETE, OPTIONS",
+      );
       expect(optRes.headers.get("Access-Control-Allow-Headers")).toContain("MCP-Protocol-Version");
       expect(optRes.headers.get("Access-Control-Expose-Headers")).toContain("WWW-Authenticate");
       expect(optRes.headers.get("Access-Control-Allow-Credentials")).toBeNull();
@@ -856,5 +858,378 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
       }),
     );
     expect(afterRes.status).toBe(401);
+  });
+
+  test("Meta Muse Custom Connector OAuth 2.1 interoperability: DCR (agent.meta.ai & muse.ai callbacks), PKCE S256, refresh_token rotation, /api/mcp tool call, and malformed JSON -32700 (Issue #33)", async () => {
+    const { sqliteDb, workerFetch, ownerCookie } = await setupEnv();
+
+    // 1. RFC 7591 DCR with Meta Muse official redirect URIs
+    const metaRedirectUris = [
+      "https://agent.meta.ai/api/hatch/oauth/callback",
+      "https://muse.ai/api/hatch/oauth/callback",
+    ];
+    const dcrRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_name: "Meta Muse Custom Connector",
+          redirect_uris: metaRedirectUris,
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+        }),
+      }),
+    );
+    expect(dcrRes.status).toBe(201);
+    expect(dcrRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    const clientId = readStr(toRecord(await dcrRes.json()), "client_id");
+    expect(clientId).not.toBe("");
+
+    // 2. Authorize with offline_access + resource + PKCE S256 using agent.meta.ai callback
+    const verifier = "meta-muse-pkce-verifier-0123456789abcdefghijklmnopqrstuvwxyz";
+    const challenge = await sha256Base64Url(verifier);
+    const authorizeUrl = new URL(`${ORIGIN}/api/auth/oauth2/authorize`);
+    authorizeUrl.searchParams.set("response_type", "code");
+    authorizeUrl.searchParams.set("client_id", clientId);
+    authorizeUrl.searchParams.set("redirect_uri", metaRedirectUris[0] ?? "");
+    authorizeUrl.searchParams.set("scope", "openid offline_access tasks:read decisions:read");
+    authorizeUrl.searchParams.set("resource", `${ORIGIN}/api/mcp`);
+    authorizeUrl.searchParams.set("code_challenge", challenge);
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
+    authorizeUrl.searchParams.set("state", "st-meta-muse-1");
+
+    const authzRes = await workerFetch(
+      new Request(authorizeUrl.toString(), {
+        method: "GET",
+        headers: { Cookie: ownerCookie },
+      }),
+    );
+    expect(authzRes.status).toBe(302);
+    const consentUrl = new URL(authzRes.headers.get("Location") ?? "", ORIGIN);
+    expect(consentUrl.pathname).toBe("/consent");
+
+    // 3. Owner approves consent
+    const consentRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/consent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+          Cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          accept: true,
+          scope: "openid offline_access tasks:read decisions:read",
+          oauth_query: consentUrl.search.slice(1),
+        }),
+      }),
+    );
+    expect(consentRes.status).toBe(200);
+    const consentRedirect = new URL(readStr(toRecord(await consentRes.json()), "url"));
+    expect(consentRedirect.origin).toBe("https://agent.meta.ai");
+    expect(consentRedirect.pathname).toBe("/api/hatch/oauth/callback");
+    const authCode = consentRedirect.searchParams.get("code") ?? "";
+    expect(authCode).not.toBe("");
+
+    // 4. Token exchange returns access_token + refresh_token
+    const tokenRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: clientId,
+          code: authCode,
+          redirect_uri: metaRedirectUris[0] ?? "",
+          code_verifier: verifier,
+          resource: `${ORIGIN}/api/mcp`,
+        }).toString(),
+      }),
+    );
+    expect(tokenRes.status).toBe(200);
+    expect(tokenRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    const tokenJson = toRecord(await tokenRes.json());
+    const initialAccessToken = readStr(tokenJson, "access_token");
+    const initialRefreshToken = readStr(tokenJson, "refresh_token");
+    expect(initialAccessToken).not.toBe("");
+    expect(initialRefreshToken).not.toBe("");
+
+    // 5. Refresh token rotation -> issues fresh access_token + distinct rotated refresh_token
+    const refreshRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: clientId,
+          refresh_token: initialRefreshToken,
+          resource: `${ORIGIN}/api/mcp`,
+        }).toString(),
+      }),
+    );
+    expect(refreshRes.status).toBe(200);
+    expect(refreshRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    const refreshJson = toRecord(await refreshRes.json());
+    const rotatedAccessToken = readStr(refreshJson, "access_token");
+    const rotatedRefreshToken = readStr(refreshJson, "refresh_token");
+    expect(rotatedAccessToken).not.toBe("");
+    expect(rotatedRefreshToken).not.toBe("");
+    expect(rotatedRefreshToken).not.toBe(initialRefreshToken);
+
+    // 5a. Within @better-auth/mcp's 30s reuse grace window, replaying initialRefreshToken returns the SAME rotated token (no extra mint)
+    const graceReplayRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: clientId,
+          refresh_token: initialRefreshToken,
+          resource: `${ORIGIN}/api/mcp`,
+        }).toString(),
+      }),
+    );
+    expect(graceReplayRes.status).toBe(200);
+    expect(readStr(toRecord(await graceReplayRes.json()), "refresh_token")).toBe(
+      rotatedRefreshToken,
+    );
+
+    // 5b. Once the 30s grace window expires, replaying initialRefreshToken MUST be rejected (RFC 9700 §4.14)
+    const refreshRows = await sqliteDb.orm
+      .select()
+      .from(schema.oauthRefreshToken)
+      .where(eq(schema.oauthRefreshToken.clientId, clientId))
+      .all();
+    const rotatedRow = refreshRows.find((r) => r.revoked !== null);
+    expect(rotatedRow).toBeDefined();
+    if (rotatedRow !== undefined) {
+      await sqliteDb.orm
+        .update(schema.oauthRefreshToken)
+        .set({ rotationReplayExpiresAt: new Date(Date.now() - 5_000) })
+        .where(eq(schema.oauthRefreshToken.id, rotatedRow.id));
+    }
+
+    const postWindowReplayRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: clientId,
+          refresh_token: initialRefreshToken,
+          resource: `${ORIGIN}/api/mcp`,
+        }).toString(),
+      }),
+    );
+    expect([400, 401]).toContain(postWindowReplayRes.status);
+
+    // 6. Authenticated /api/mcp tool call succeeds with rotated access token (JWT resource token)
+    const toolRes = await workerFetch(
+      new Request(`${ORIGIN}/api/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${rotatedAccessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2025-06-18",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 10,
+          method: "tools/call",
+          params: { name: "get_workspace_context", arguments: {} },
+        }),
+      }),
+    );
+    expect(toolRes.status).toBe(200);
+    expect(toolRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    const toolRpc = await parseJsonOrSseRpc(toolRes);
+    const toolResult = toRecord(toolRpc["result"]);
+    expect(toolResult["isError"]).not.toBe(true);
+
+    // 7. Malformed JSON POST to /api/mcp returns structured JSON-RPC -32700 Parse error (never HTML 500) + CORS
+    const malformedRes = await workerFetch(
+      new Request(`${ORIGIN}/api/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${rotatedAccessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2025-06-18",
+        },
+        body: "{not-valid-json",
+      }),
+    );
+    expect(malformedRes.status).toBe(400);
+    expect(malformedRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(malformedRes.headers.get("Content-Type") ?? "").toContain("application/json");
+    const malformedRpc = toRecord(await malformedRes.json());
+    const malformedErr = toRecord(malformedRpc["error"]);
+    expect(malformedErr["code"]).toBe(-32700);
+  });
+
+  test("Google Gemini MCP interoperability: unauth HEAD /api/mcp 401 WWW-Authenticate + OPTIONS Allow-Methods HEAD + DCR (googleusercontent & vertexaisearch callbacks) + MCP handshake (Issue #34)", async () => {
+    const { workerFetch, ownerCookie } = await setupEnv();
+
+    // 1. OPTIONS /api/mcp advertises HEAD in Access-Control-Allow-Methods
+    const optRes = await workerFetch(
+      new Request(`${ORIGIN}/api/mcp`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://gemini.google.com",
+          "Access-Control-Request-Method": "HEAD",
+        },
+      }),
+    );
+    expect(optRes.status).toBe(204);
+    expect(optRes.headers.get("Access-Control-Allow-Methods") ?? "").toContain("HEAD");
+    expect(optRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+
+    // 2. Unauthenticated HEAD /api/mcp & /api/mcp/ discovery probes -> 401 + WWW-Authenticate + CORS + empty body (RFC 9110 §9.3.2)
+    for (const headPath of ["/api/mcp", "/api/mcp/"] as const) {
+      const headRes = await workerFetch(
+        new Request(`${ORIGIN}${headPath}`, {
+          method: "HEAD",
+        }),
+      );
+      expect(headRes.status).toBe(401);
+      expect(await headRes.text()).toBe("");
+      expect(headRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+      expect(headRes.headers.get("Access-Control-Expose-Headers") ?? "").toContain(
+        "WWW-Authenticate",
+      );
+      const headWwwAuth = headRes.headers.get("WWW-Authenticate") ?? "";
+      expect(headWwwAuth).toContain("Bearer");
+      expect(headWwwAuth).toContain(
+        `resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/api/mcp"`,
+      );
+      expect(headWwwAuth).toContain("scope=");
+    }
+
+    // 3. RFC 7591 DCR with Gemini Web relay & Gemini Enterprise redirect URIs
+    const geminiRelayUri =
+      "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-botboard-test";
+    const geminiEnterpriseUri = "https://vertexaisearch.cloud.google.com/oauth-redirect";
+    const dcrRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_name: "Google Gemini Custom App",
+          redirect_uris: [geminiRelayUri, geminiEnterpriseUri],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+        }),
+      }),
+    );
+    expect(dcrRes.status).toBe(201);
+    const clientId = readStr(toRecord(await dcrRes.json()), "client_id");
+    expect(clientId).not.toBe("");
+
+    // 4. Authorize via Gemini Web relay callback with PKCE S256
+    const verifier = "google-gemini-pkce-verifier-0123456789abcdefghijklmnopqrstuvwxyz";
+    const challenge = await sha256Base64Url(verifier);
+    const authorizeUrl = new URL(`${ORIGIN}/api/auth/oauth2/authorize`);
+    authorizeUrl.searchParams.set("response_type", "code");
+    authorizeUrl.searchParams.set("client_id", clientId);
+    authorizeUrl.searchParams.set("redirect_uri", geminiRelayUri);
+    authorizeUrl.searchParams.set("scope", "openid tasks:read decisions:read");
+    authorizeUrl.searchParams.set("resource", `${ORIGIN}/api/mcp`);
+    authorizeUrl.searchParams.set("code_challenge", challenge);
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
+    authorizeUrl.searchParams.set("state", "st-gemini-1");
+
+    const authzRes = await workerFetch(
+      new Request(authorizeUrl.toString(), {
+        method: "GET",
+        headers: { Cookie: ownerCookie },
+      }),
+    );
+    expect(authzRes.status).toBe(302);
+    const consentUrl = new URL(authzRes.headers.get("Location") ?? "", ORIGIN);
+    expect(consentUrl.pathname).toBe("/consent");
+
+    // 5. Owner approves consent -> redirects cleanly to Gemini relay URL
+    const consentRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/consent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+          Cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          accept: true,
+          scope: "openid tasks:read decisions:read",
+          oauth_query: consentUrl.search.slice(1),
+        }),
+      }),
+    );
+    expect(consentRes.status).toBe(200);
+    const consentRedirect = new URL(readStr(toRecord(await consentRes.json()), "url"));
+    expect(consentRedirect.origin).toBe("https://oauth-redirect.googleusercontent.com");
+    const authCode = consentRedirect.searchParams.get("code") ?? "";
+    expect(authCode).not.toBe("");
+
+    // 6. Exchange code -> JWT access token & run authenticated /api/mcp initialize + authenticated HEAD 405
+    const tokenRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: clientId,
+          code: authCode,
+          redirect_uri: geminiRelayUri,
+          code_verifier: verifier,
+          resource: `${ORIGIN}/api/mcp`,
+        }).toString(),
+      }),
+    );
+    expect(tokenRes.status).toBe(200);
+    const accessToken = readStr(toRecord(await tokenRes.json()), "access_token");
+    expect(accessToken).not.toBe("");
+
+    // Authenticated HEAD /api/mcp -> 405 Method Not Allowed + CORS + empty body
+    const authHeadRes = await workerFetch(
+      new Request(`${ORIGIN}/api/mcp`, {
+        method: "HEAD",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }),
+    );
+    expect(authHeadRes.status).toBe(405);
+    expect(await authHeadRes.text()).toBe("");
+    expect(authHeadRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+
+    const initRes = await workerFetch(
+      new Request(`${ORIGIN}/api/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2025-06-18",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "google-gemini-test-client", version: "1.0.0" },
+          },
+        }),
+      }),
+    );
+    expect(initRes.status).toBe(200);
+    expect(initRes.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    const initRpc = await parseJsonOrSseRpc(initRes);
+    const initResult = toRecord(initRpc["result"]);
+    expect(readStr(initResult, "instructions")).toContain("bot-board");
   });
 });

@@ -390,12 +390,22 @@ function serveStaticAsset(request: Request): Response {
 }
 
 function buildWorkerEnv(state: FullStackState): WorkerRuntimeEnv {
+  const workerLlmProvider = process.env["WORKER_LLM_PROVIDER"]?.trim();
   const xaiKey = process.env["XAI_API_KEY"]?.trim() ?? "";
   const xaiModel = process.env["XAI_MODEL"]?.trim();
   const xaiApiUrl = process.env["XAI_API_URL"]?.trim();
+  const geminiKey = process.env["GEMINI_API_KEY"]?.trim() ?? "";
+  const geminiModel = process.env["GEMINI_MODEL"]?.trim();
+  const geminiApiUrl = process.env["GEMINI_API_URL"]?.trim();
+  const metaKey = process.env["META_MODEL_API_KEY"]?.trim() ?? "";
+  const metaModel = process.env["META_MODEL"]?.trim();
+  const metaApiUrl = process.env["META_API_URL"]?.trim();
   const githubClientId = process.env["GITHUB_CLIENT_ID"]?.trim();
   const githubClientSecret = process.env["GITHUB_CLIENT_SECRET"]?.trim();
-  const useGrokProductionPath = !FORCE_LOCAL_ADAPTER && xaiKey !== "";
+  const hasRealProviderKey = xaiKey !== "" || geminiKey !== "" || metaKey !== "";
+  const useProductionAdapterPath =
+    !FORCE_LOCAL_ADAPTER &&
+    (hasRealProviderKey || (workerLlmProvider !== undefined && workerLlmProvider !== ""));
 
   return {
     DB: state.d1,
@@ -436,13 +446,24 @@ function buildWorkerEnv(state: FullStackState): WorkerRuntimeEnv {
     ...(githubClientSecret !== undefined && githubClientSecret !== ""
       ? { GITHUB_CLIENT_SECRET: githubClientSecret }
       : {}),
-    // When XAI_API_KEY is supplied (and not forced local), let src/worker/index.ts resolve createGrokModelAdapter
-    // identically to production (using XAI_API_KEY / XAI_MODEL / XAI_API_URL).
-    ...(useGrokProductionPath
+    // When any provider API key or WORKER_LLM_PROVIDER is supplied (and not forced local),
+    // let src/worker/index.ts resolve the production adapter identically to Cloudflare Workers.
+    ...(useProductionAdapterPath
       ? {
-          XAI_API_KEY: xaiKey,
+          ...(workerLlmProvider !== undefined && workerLlmProvider !== ""
+            ? { WORKER_LLM_PROVIDER: workerLlmProvider }
+            : {}),
+          ...(xaiKey !== "" ? { XAI_API_KEY: xaiKey } : {}),
           ...(xaiModel !== undefined && xaiModel !== "" ? { XAI_MODEL: xaiModel } : {}),
           ...(xaiApiUrl !== undefined && xaiApiUrl !== "" ? { XAI_API_URL: xaiApiUrl } : {}),
+          ...(geminiKey !== "" ? { GEMINI_API_KEY: geminiKey } : {}),
+          ...(geminiModel !== undefined && geminiModel !== "" ? { GEMINI_MODEL: geminiModel } : {}),
+          ...(geminiApiUrl !== undefined && geminiApiUrl !== ""
+            ? { GEMINI_API_URL: geminiApiUrl }
+            : {}),
+          ...(metaKey !== "" ? { META_MODEL_API_KEY: metaKey } : {}),
+          ...(metaModel !== undefined && metaModel !== "" ? { META_MODEL: metaModel } : {}),
+          ...(metaApiUrl !== undefined && metaApiUrl !== "" ? { META_API_URL: metaApiUrl } : {}),
         }
       : {
           MODEL_ADAPTER: createLocalScenarioModelAdapter(),
