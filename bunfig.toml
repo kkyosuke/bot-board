@@ -1,0 +1,290 @@
+[fmt]
+printWidth = 100
+semi = true
+singleQuote = false
+trailingComma = "all"
+endOfLine = "lf"
+proseWrap = "preserve"
+sortImports = true
+sortPackageJson = true
+
+[lint]
+typeAware = true
+maxWarnings = 0
+reportUnusedDisableDirectives = "error"
+
+[lint.rules]
+"@typescript-eslint/no-explicit-any" = "error"
+"@typescript-eslint/no-floating-promises" = "error"
+"@typescript-eslint/no-misused-promises" = "error"
+"@typescript-eslint/consistent-type-imports" = [
+  "error",
+  { prefer = "type-imports", fixStyle = "inline-type-imports" },
+]
+"@typescript-eslint/consistent-type-assertions" = ["error", { assertionStyle = "never" }]
+"@typescript-eslint/ban-ts-comment" = ["error", {
+  "ts-expect-error" = true,
+  "ts-ignore" = true,
+  "ts-nocheck" = true,
+  "ts-check" = true,
+}]
+"eqeqeq" = ["error", "smart"]
+"no-console" = "error"
+"bun:test/no-focused-tests" = "error"
+"jsx_a11y/alt-text" = "error"
+"jsx_a11y/click-events-have-key-events" = "error"
+"jsx_a11y/interactive-supports-focus" = "error"
+"jsx_a11y/label-has-associated-control" = "error"
+"jsx_a11y/no-static-element-interactions" = "error"
+"no-restricted-imports" = ["error", {
+  paths = [
+    {
+      name = "drizzle-orm/d1",
+      message = "D1 client creation is restricted to src/db/ (request-scoped).",
+    },
+    {
+      name = "drizzle-orm/bun-sqlite",
+      message = "SQLite client creation is restricted to src/db/ or tests/.",
+    },
+    {
+      name = "drizzle-orm/sqlite-proxy",
+      message = "SQLite client creation is restricted to src/db/.",
+    },
+    {
+      name = "better-auth",
+      message = "Better Auth initialization is restricted to src/auth/ (request-scoped).",
+    },
+    {
+      name = "@better-auth/mcp",
+      message = "Better Auth MCP setup is restricted to src/auth/.",
+    },
+  ],
+  patterns = [
+    {
+      group = ["drizzle-orm/d1/*", "drizzle-orm/bun-sqlite/*", "drizzle-orm/sqlite-proxy/*"],
+      message = "Drizzle SQLite/D1 driver modules are restricted to src/db/.",
+    },
+    {
+      group = ["better-auth/*", "@better-auth/*"],
+      message = "Better Auth modules and subpaths are restricted to src/auth/.",
+    },
+  ],
+}]
+"import/no-restricted-paths" = ["error", {
+  zones = [
+    {
+      target = "./src/domain",
+      from = [
+        "./src/client",
+        "./src/server",
+        "./src/services",
+        "./src/db",
+        "./src/auth",
+        "./src/adapters",
+        "./src/worker",
+        "./src/shared",
+      ],
+      message = "src/domain must remain pure with zero external layer dependencies.",
+    },
+    {
+      target = "./src/shared",
+      from = [
+        "./src/client",
+        "./src/server",
+        "./src/services",
+        "./src/db",
+        "./src/auth",
+        "./src/adapters",
+        "./src/worker",
+        "./src/domain",
+      ],
+      message = "src/shared utilities cannot depend on upper or domain layers.",
+    },
+    {
+      target = "./src/db",
+      from = [
+        "./src/client",
+        "./src/server",
+        "./src/services",
+        "./src/auth",
+        "./src/adapters",
+        "./src/worker",
+      ],
+      message = "src/db cannot depend on auth, services, adapters, routes, worker, or client.",
+    },
+    {
+      target = "./src/adapters",
+      from = [
+        "./src/client",
+        "./src/server",
+        "./src/services",
+        "./src/db",
+        "./src/auth",
+        "./src/worker",
+      ],
+      message = "src/adapters must remain isolated from DB, auth, services, routes, and worker.",
+    },
+    {
+      target = "./src/auth",
+      from = ["./src/client", "./src/server", "./src/services", "./src/adapters", "./src/worker"],
+      message = "src/auth cannot depend on services, adapters, routes, worker, or client.",
+    },
+    {
+      target = "./src/services",
+      from = ["./src/client", "./src/server", "./src/worker"],
+      message = "src/services cannot depend on HTTP routes, worker entrypoints, or client UI.",
+    },
+    {
+      target = "./src/client",
+      from = [
+        "./src/server",
+        "./src/services",
+        "./src/db",
+        "./src/auth",
+        "./src/adapters",
+        "./src/worker",
+      ],
+      message = "src/client cannot import server, service, auth, worker, or DB modules.",
+    },
+    {
+      target = "./src/server",
+      from = ["./src/db", "./src/client", "./src/worker"],
+      message = "src/server cannot access src/db, src/client, or src/worker directly.",
+    },
+    {
+      target = [
+        "./src/services/bot",
+        "./src/services/system",
+        "./src/adapters",
+        "./src/worker",
+        "./src/server/routes/mcp",
+      ],
+      from = ["./src/services/human", "./src/server/routes/human", "./src/auth/owner.ts"],
+      message = "BOT-02: Bot, System, Adapter, Worker, and MCP layers cannot access Human-only modules.",
+    },
+    {
+      target = [
+        "./src/client",
+        "./src/domain",
+        "./src/services",
+        "./src/server",
+        "./src/worker",
+        "./src/adapters",
+        "./src/db",
+        "./src/shared",
+      ],
+      from = "./src/auth/internal",
+      message = "Capability minting (src/auth/internal) is restricted to src/auth.",
+    },
+    {
+      target = [
+        "./src/client",
+        "./src/domain",
+        "./src/services",
+        "./src/server/routes/mcp",
+        "./src/worker",
+        "./src/adapters",
+        "./src/db",
+        "./src/shared",
+      ],
+      from = "./src/auth/owner.ts",
+      message = "Owner capability verification (src/auth/owner.ts) is restricted to Human routes.",
+    },
+    {
+      target = [
+        "./src/client",
+        "./src/domain",
+        "./src/services",
+        "./src/server/routes/human",
+        "./src/adapters",
+        "./src/db",
+        "./src/shared",
+      ],
+      from = "./src/auth/bot.ts",
+      message = "Bot capability verification (src/auth/bot.ts) is restricted to MCP routes and Worker.",
+    },
+  ],
+}]
+
+[[lint.overrides]]
+files = ["src/shared/logger.ts"]
+rules = { "no-console" = "off" }
+
+[[lint.overrides]]
+files = ["src/domain/**"]
+rules = {
+  "no-restricted-globals" = [
+    "error",
+    "window",
+    "document",
+    "localStorage",
+    "sessionStorage",
+    "fetch",
+    "Bun",
+  ],
+}
+
+[[lint.overrides]]
+files = ["src/client/**"]
+rules = { "no-restricted-globals" = ["error", "Bun"] }
+
+[[lint.overrides]]
+files = ["src/db/**"]
+rules = {
+  "no-restricted-imports" = ["error", {
+    paths = [
+      {
+        name = "better-auth",
+        message = "Better Auth initialization is restricted to src/auth/.",
+      },
+      {
+        name = "@better-auth/mcp",
+        message = "Better Auth MCP setup is restricted to src/auth/.",
+      },
+    ],
+    patterns = [{
+      group = ["better-auth/*", "@better-auth/*"],
+      message = "Better Auth modules and subpaths are restricted to src/auth/.",
+    }],
+  }],
+}
+
+[[lint.overrides]]
+files = ["src/auth/**"]
+rules = {
+  "no-restricted-imports" = ["error", {
+    paths = [
+      {
+        name = "drizzle-orm/d1",
+        message = "D1 client creation is restricted to src/db/.",
+      },
+      {
+        name = "drizzle-orm/bun-sqlite",
+        message = "SQLite client creation is restricted to src/db/ or tests/.",
+      },
+      {
+        name = "drizzle-orm/sqlite-proxy",
+        message = "SQLite client creation is restricted to src/db/.",
+      },
+    ],
+    patterns = [{
+      group = ["drizzle-orm/d1/*", "drizzle-orm/bun-sqlite/*", "drizzle-orm/sqlite-proxy/*"],
+      message = "Drizzle SQLite/D1 driver modules are restricted to src/db/.",
+    }],
+  }],
+}
+
+[[lint.overrides]]
+files = ["tests/**"]
+rules = {
+  "@typescript-eslint/ban-ts-comment" = ["error", {
+    "ts-expect-error" = "allow-with-description",
+    "ts-ignore" = true,
+    "ts-nocheck" = true,
+    "ts-check" = true,
+    minimumDescriptionLength = 10,
+  }],
+}
+
+[test]
+randomize = true

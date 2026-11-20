@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+for dir in "$HOME/.local/bin" "$HOME/.bun/bin"; do
+  if [ -d "$dir" ]; then
+    PATH="$dir:$PATH"
+  fi
+done
+export PATH
+
+bun fmt --check --staged
+bun lint --staged --no-error-on-unmatched-pattern
