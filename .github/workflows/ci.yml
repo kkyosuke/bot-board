@@ -32,5 +32,7 @@ jobs:
         run: bun lint
       - name: Check TypeScript types
         run: bun check
+      - name: Check doc and guardrail rules
+        run: bun run check:guardrails
       - name: Run test suite
         run: bun test

@@ -136,6 +136,7 @@ describe("repository mechanical guardrails", () => {
         "src/adapters",
         "src/worker",
         "src/auth/internal",
+        "scripts",
         "node_modules/better-auth",
         "node_modules/@better-auth/mcp",
         "node_modules/drizzle-orm",
@@ -153,6 +154,7 @@ describe("repository mechanical guardrails", () => {
       writeFileSync(join(tempRoot, "src/auth/internal/mint.ts"), "export const secretMint = 1;\n");
       writeFileSync(join(tempRoot, "src/auth/owner.ts"), "export const verifyOwner = 1;\n");
       writeFileSync(join(tempRoot, "src/auth/bot.ts"), "export const verifyBot = 1;\n");
+      writeFileSync(join(tempRoot, "scripts/helper.ts"), "export const tool = 1;\n");
       writeFileSync(
         join(tempRoot, "node_modules/better-auth/minimal.d.ts"),
         "export declare function betterAuth(): { readonly ok: true };\n",
@@ -270,6 +272,41 @@ describe("repository mechanical guardrails", () => {
           file: "src/domain/log.ts",
           code: 'console.log("secret");\n',
           expectedRule: "no-console",
+        },
+        {
+          file: "scripts/bad-net.ts",
+          code: 'export const p = fetch("https://example.com");\n',
+          expectedRule: "no-restricted-globals",
+        },
+        {
+          file: "scripts/bad-bun-global.ts",
+          code: "export const ver = Bun.version;\n",
+          expectedRule: "no-restricted-globals",
+        },
+        {
+          file: "scripts/bad-random.ts",
+          code: "export const r = Math.random();\n",
+          expectedRule: "no-restricted-properties",
+        },
+        {
+          file: "scripts/bad-dns.ts",
+          code: 'import { lookup } from "node:dns/promises";\nexport const fn = lookup;\n',
+          expectedRule: "no-restricted-imports",
+        },
+        {
+          file: "scripts/bad-auth-in-scripts.ts",
+          code: 'import { betterAuth } from "better-auth/minimal";\nexport const fn = betterAuth;\n',
+          expectedRule: "no-restricted-imports",
+        },
+        {
+          file: "scripts/bad-src-import.ts",
+          code: 'import { dbToken } from "../src/db/index.ts";\nexport const x = dbToken;\n',
+          expectedRule: "import/no-restricted-paths",
+        },
+        {
+          file: "src/domain/bad-scripts-import.ts",
+          code: 'import { tool } from "../../scripts/helper.ts";\nexport const x = tool;\n',
+          expectedRule: "import/no-restricted-paths",
         },
       ];
 

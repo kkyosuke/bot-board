@@ -10,3 +10,4 @@ export PATH
 
 bun fmt --check --staged
 bun lint --staged --no-error-on-unmatched-pattern
+bun run check:guardrails

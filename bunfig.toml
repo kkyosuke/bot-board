@@ -203,6 +203,16 @@ reportUnusedDisableDirectives = "error"
       from = "./src/auth/bot.ts",
       message = "Bot capability verification (src/auth/bot.ts) is restricted to MCP routes and Worker.",
     },
+    {
+      target = "./src",
+      from = "./scripts",
+      message = "Application modules in src/ cannot import repository scripts/.",
+    },
+    {
+      target = "./scripts",
+      from = "./src",
+      message = "Guardrail scripts/ must remain independent from application runtime src/.",
+    },
   ],
 }]
 
@@ -283,6 +293,72 @@ rules = {
     "ts-nocheck" = true,
     "ts-check" = true,
     minimumDescriptionLength = 10,
+  }],
+}
+
+[[lint.overrides]]
+files = ["scripts/**"]
+rules = {
+  "no-restricted-globals" = [
+    "error",
+    "fetch",
+    "WebSocket",
+    "XMLHttpRequest",
+    "EventSource",
+    "Bun",
+    "globalThis",
+    "Date",
+    "crypto",
+  ],
+  "no-restricted-properties" = ["error", {
+    object = "Math",
+    property = "random",
+    message = "Guardrail scripts must remain deterministic.",
+  }],
+  "no-restricted-imports" = ["error", {
+    paths = [
+      "bun",
+      "node:http",
+      "node:https",
+      "node:http2",
+      "node:net",
+      "node:tls",
+      "node:dns",
+      "node:dgram",
+      "node:child_process",
+      "node:worker_threads",
+      "node:crypto",
+      "http",
+      "https",
+      "http2",
+      "net",
+      "tls",
+      "dns",
+      "dgram",
+      "child_process",
+      "worker_threads",
+      "crypto",
+      "undici",
+      "drizzle-orm/d1",
+      "drizzle-orm/bun-sqlite",
+      "drizzle-orm/sqlite-proxy",
+      "better-auth",
+      "@better-auth/mcp",
+    ],
+    patterns = [
+      {
+        group = ["bun:*", "node:dns/*", "dns/*", "undici/*", "node:stream/web"],
+        message = "Network, subprocess, and runtime-specific modules are disallowed in deterministic scripts/.",
+      },
+      {
+        group = ["drizzle-orm/d1/*", "drizzle-orm/bun-sqlite/*", "drizzle-orm/sqlite-proxy/*"],
+        message = "Drizzle SQLite/D1 driver modules are restricted to src/db/.",
+      },
+      {
+        group = ["better-auth/*", "@better-auth/*"],
+        message = "Better Auth modules and subpaths are restricted to src/auth/.",
+      },
+    ],
   }],
 }
 

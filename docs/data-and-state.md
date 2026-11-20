@@ -40,8 +40,8 @@ flowchart LR
 | `events`                                                             | `id`                                                                                                                                        | `workspace_id`, `actor_type`, `actor_id`, `entity_type`, `entity_id`, `action`, `payload_json`, `request_id`, `created_at`                                                                                                                                              | 監査・履歴・失敗理由追跡用                                                                                                                                        |
 | `idempotency_keys`                                                   | `(workspace_id, actor_type, actor_id, operation, request_id)`                                                                               | `input_hash`, `response_json`, `created_at`                                                                                                                                                                                                                             | 再送時の二重実行防止（`DEC-02`）                                                                                                                                  |
 
-- 禁止：許可されたオーナー以外の自由サインアップを受け付けること（Better Auth `databaseHooks` 等で初期オーナー以外は拒否する）
-- 禁止：D1 `db.batch` 内で先行条件付き `UPDATE` が0件一致のときに無条件の後続SQLや Queue `send()` を通すこと（後続SQLは更新後親状態の `EXISTS (...)` / `WHERE changes() = 1` または0件時ロールバック用ガードで保護し、`meta.changes === 1` 確認後にのみ Queue 投入する）
+- 禁止：許可されたオーナー以外の自由サインアップを受け付けること（Better Auth `databaseHooks` 等で初期オーナー以外は拒否する）（強制: `S3予定`）
+- 禁止：D1 `db.batch` 内で先行条件付き `UPDATE` が0件一致のときに無条件の後続SQLや Queue `send()` を通すこと（後続SQLは更新後親状態の `EXISTS (...)` / `WHERE changes() = 1` または0件時ロールバック用ガードで保護し、`meta.changes === 1` 確認後にのみ Queue 投入する）（強制: `src/db/index.ts`, `S1予定`）
 
 ---
 
@@ -79,8 +79,8 @@ stateDiagram-v2
 | `waiting_human → ready / blocked` | System（確定/失効時） | ① `policy` / `choice` の `accepted` 確定（`ready`）、② 単一またはグループ内**全候補**の `declined` 確定（`on_decline_policy = revise` は `ready`、`block` は `blocked`。未決候補が残る間は `waiting_human` 維持）、③ 有効カードが全て `expired` / 後継なし `superseded` となった場合（`ready`） |
 | `blocked / failed → ready`        | Human / Bot           | Human API `POST /api/human/tasks/:id/retry`、またはBotによる前提タスク解消                                                                                                                                                                                                                      |
 
-- 禁止：`requires_approval = true` のタスクを `submit_proposal(deliverable)` の採用確定なしに `done` へ遷移させること
-- 禁止：見送り（`declined`）や作業失敗（`failed`）を `done` として扱うこと（`BOT-03`）
+- 禁止：`requires_approval = true` のタスクを `submit_proposal(deliverable)` の採用確定なしに `done` へ遷移させること（強制: `S1予定`）
+- 禁止：見送り（`declined`）や作業失敗（`failed`）を `done` として扱うこと（`BOT-03`）（強制: `S1予定`）
 
 ---
 
@@ -107,8 +107,8 @@ stateDiagram-v2
 ```
 
 - 遷移規則：`provisional` から `pending / superseded / closed / expired` へ移る場合は、親カードの更新成立（`changes() = 1`）を条件に同一 `db.batch` で `decisions(status='provisional')` を `status = 'canceled'`（`canceled_at` 記録）へ更新する。
-- 禁止：`provisional` 状態のカードを確定済み承認としてBot・Workerへ渡すこと（`DEC-01`）
-- 禁止：確定後（`accepted` / `declined`）のカードを `undo` や `superseded` で書き換えること（変更希望・再確認は新規カードを作成する）
+- 禁止：`provisional` 状態のカードを確定済み承認としてBot・Workerへ渡すこと（`DEC-01`）（強制: `S1予定`, `S3予定`）
+- 禁止：確定後（`accepted` / `declined`）のカードを `undo` や `superseded` で書き換えること（変更希望・再確認は新規カードを作成する）（強制: `S1予定`, `S3予定`）
 
 ---
 
