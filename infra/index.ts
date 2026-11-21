@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import * as cloudflare from "@pulumi/cloudflare";
 import * as pulumi from "@pulumi/pulumi";
 
+import { resolveAndValidateAuthInfraConfig } from "./config-validation";
+
 const config = new pulumi.Config("bot-board");
 const stack = pulumi.getStack();
 const isProd = stack === "prod";
@@ -52,9 +54,20 @@ function requireSecretConfig(configKey: string, envKey: string): pulumi.Output<s
 
 const accountId = requirePlainConfig("accountId", "CLOUDFLARE_ACCOUNT_ID");
 const appEnv = config.get("appEnv") ?? stack;
-const betterAuthUrl = requirePlainConfig("betterAuthUrl", "BETTER_AUTH_URL");
-const trustedOrigins = getPlainConfig("trustedOrigins", "TRUSTED_ORIGINS") ?? betterAuthUrl;
-const ownerGithubId = requirePlainConfig("ownerGithubId", "OWNER_GITHUB_ID");
+const zoneId = getPlainConfig("zoneId", "CLOUDFLARE_ZONE_ID");
+const rawHostname = getPlainConfig("hostname", "CUSTOM_HOSTNAME");
+const routePattern = getPlainConfig("routePattern", "ROUTE_PATTERN");
+
+const validatedAuthConfig = resolveAndValidateAuthInfraConfig({
+  stack,
+  hostname: rawHostname,
+  routePattern,
+  zoneId,
+  betterAuthUrl: getPlainConfig("betterAuthUrl", "BETTER_AUTH_URL"),
+  trustedOrigins: getPlainConfig("trustedOrigins", "TRUSTED_ORIGINS"),
+  ownerEmail: requirePlainConfig("ownerEmail", "OWNER_EMAIL"),
+});
+const { hostname, betterAuthUrl, trustedOrigins, ownerEmail } = validatedAuthConfig;
 
 const rawBetterAuthSecretEnv = process.env["BETTER_AUTH_SECRET"]?.trim() ?? "";
 if (
@@ -67,8 +80,6 @@ if (
   );
 }
 const betterAuthSecret = requireSecretConfig("betterAuthSecret", "BETTER_AUTH_SECRET");
-const githubClientId = requireSecretConfig("githubClientId", "GITHUB_CLIENT_ID");
-const githubClientSecret = requireSecretConfig("githubClientSecret", "GITHUB_CLIENT_SECRET");
 
 const VALID_WORKER_LLM_PROVIDERS = ["grok", "gemini", "meta-muse"] as const;
 const workerLlmProviderRaw = getPlainConfig(
@@ -125,11 +136,7 @@ const rateLimitNamespaceId = config.require("rateLimitNamespaceId");
 const workerCpuMsLimit = config.getNumber("workerCpuMsLimit") ?? 10_000;
 const enableWorkersDev = config.getBoolean("enableWorkersDev") ?? !isProd;
 
-const zoneId = getPlainConfig("zoneId", "CLOUDFLARE_ZONE_ID");
-const hostname = getPlainConfig("hostname", "CUSTOM_HOSTNAME");
-const routePattern = getPlainConfig("routePattern", "ROUTE_PATTERN");
-
-// Validate critical production configuration before planning/applying Cloudflare resources
+// Validate rate limiting and CPU limits before planning/applying Cloudflare resources
 if (rateLimitPeriodSeconds !== 10 && rateLimitPeriodSeconds !== 60) {
   throw new Error(
     `Invalid bot-board:rateLimitPeriodSeconds (${rateLimitPeriodSeconds}): Cloudflare Rate Limiting only supports 10 or 60 seconds.`,
@@ -138,29 +145,6 @@ if (rateLimitPeriodSeconds !== 10 && rateLimitPeriodSeconds !== 60) {
 if (!Number.isInteger(workerCpuMsLimit) || workerCpuMsLimit < 5000 || workerCpuMsLimit > 300_000) {
   throw new Error(
     `Invalid bot-board:workerCpuMsLimit (${workerCpuMsLimit}): must be an integer between 5000 and 300000 ms.`,
-  );
-}
-if ((stack === "staging" || isProd) && !betterAuthUrl.startsWith("https://")) {
-  throw new Error(
-    `Invalid bot-board:betterAuthUrl ("${betterAuthUrl}"): staging and prod stacks require an https:// URL.`,
-  );
-}
-if ((hostname !== undefined || routePattern !== undefined) && zoneId === undefined) {
-  throw new Error(
-    "bot-board:zoneId is required whenever bot-board:hostname or bot-board:routePattern is set.",
-  );
-}
-if (hostname !== undefined) {
-  const authHost = new URL(betterAuthUrl).hostname;
-  if (authHost !== hostname) {
-    throw new Error(
-      `bot-board:hostname ("${hostname}") must match bot-board:betterAuthUrl host ("${authHost}").`,
-    );
-  }
-}
-if (isProd && (zoneId === undefined || (hostname === undefined && routePattern === undefined))) {
-  throw new Error(
-    "Production stack requires bot-board:zoneId plus either bot-board:hostname or bot-board:routePattern.",
   );
 }
 
@@ -315,23 +299,13 @@ const workerBindings: pulumi.Input<cloudflare.types.input.WorkersScriptBinding>[
   },
   {
     type: "plain_text",
-    name: "OWNER_GITHUB_ID",
-    text: ownerGithubId,
+    name: "OWNER_EMAIL",
+    text: ownerEmail,
   },
   {
     type: "secret_text",
     name: "BETTER_AUTH_SECRET",
     text: betterAuthSecret,
-  },
-  {
-    type: "secret_text",
-    name: "GITHUB_CLIENT_ID",
-    text: githubClientId,
-  },
-  {
-    type: "secret_text",
-    name: "GITHUB_CLIENT_SECRET",
-    text: githubClientSecret,
   },
 ];
 

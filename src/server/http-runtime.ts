@@ -22,9 +22,7 @@ export interface HttpRuntimeConfig {
   readonly betterAuthSecret?: string;
   readonly betterAuthUrl?: string;
   readonly trustedOrigins?: string;
-  readonly githubClientId?: string;
-  readonly githubClientSecret?: string;
-  readonly ownerGithubId?: string;
+  readonly ownerEmail?: string;
   readonly enableMcpOAuth?: boolean;
   readonly waitUntil?: (promise: Promise<unknown>) => void;
   readonly now?: () => number;
@@ -51,11 +49,7 @@ export async function handleWorkerHttpRequest(
         secret: config.betterAuthSecret,
         trustedOrigins,
         enableMcpOAuth: config.enableMcpOAuth ?? true,
-        ...(config.githubClientId !== undefined ? { githubClientId: config.githubClientId } : {}),
-        ...(config.githubClientSecret !== undefined
-          ? { githubClientSecret: config.githubClientSecret }
-          : {}),
-        ...(config.ownerGithubId !== undefined ? { ownerGithubId: config.ownerGithubId } : {}),
+        ...(config.ownerEmail !== undefined ? { ownerEmail: config.ownerEmail } : {}),
         ...(config.waitUntil !== undefined ? { waitUntil: config.waitUntil } : {}),
         ...(config.now !== undefined ? { now: config.now } : {}),
       }

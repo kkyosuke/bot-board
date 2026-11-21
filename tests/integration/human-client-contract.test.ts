@@ -32,7 +32,7 @@ import {
 } from "@/services/system";
 
 const ORIGIN = "https://board.example.test";
-const OWNER_GITHUB_ID = "github-owner-contract-1";
+const OWNER_EMAIL = "contract@example.test";
 const AUTH_SECRET = "contract-test-secret-key-0123456789abcdef";
 
 const originalFetch = globalThis.fetch;
@@ -70,15 +70,15 @@ async function createContractHarness() {
   await db.orm.insert(schema.user).values({
     id: ownerUserId,
     name: "Contract Owner",
-    email: "contract@example.test",
+    email: OWNER_EMAIL,
     emailVerified: true,
     createdAt: new Date(nowMs),
     updatedAt: new Date(nowMs),
   });
   await db.orm.insert(schema.account).values({
-    id: "acc-contract-gh",
-    accountId: OWNER_GITHUB_ID,
-    providerId: "github",
+    id: "acc-contract-cred",
+    accountId: ownerUserId,
+    providerId: "credential",
     userId: ownerUserId,
     createdAt: new Date(nowMs),
     updatedAt: new Date(nowMs),
@@ -141,7 +141,7 @@ async function createContractHarness() {
     baseUrl: ORIGIN,
     secret: AUTH_SECRET,
     trustedOrigins,
-    ownerGithubId: OWNER_GITHUB_ID,
+    ownerEmail: OWNER_EMAIL,
     enableMcpOAuth: false,
     now: () => nowMs,
   });
@@ -154,7 +154,7 @@ async function createContractHarness() {
             db,
             auth,
             request,
-            ownerGithubId: OWNER_GITHUB_ID,
+            ownerEmail: OWNER_EMAIL,
           }),
         port: createHumanServicePort(db, {
           finalizeQueue,

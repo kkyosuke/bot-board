@@ -5,15 +5,13 @@ config:
   bot-board:rateLimitPeriodSeconds: "60"
   bot-board:workerCpuMsLimit: "10000"
   bot-board:enableWorkersDev: "true"
-  # Required before `pulumi up` (set via `pulumi config set` / `--secret`):
+  # Required before `pulumi up` (set via `pulumi config set` / `--secret` or GitHub Env/Secrets):
   # - cloudflare:apiToken (or CLOUDFLARE_API_TOKEN env var)
   # - bot-board:accountId
-  # - bot-board:betterAuthUrl (e.g. https://staging.bot-board.example.com or https://bot-board-staging.<subdomain>.workers.dev)
-  # - bot-board:trustedOrigins (comma-separated HTTPS origins)
-  # - bot-board:ownerGithubId
+  # - bot-board:betterAuthUrl (auto-derived from https://<hostname> when bot-board:hostname is set)
+  # - bot-board:trustedOrigins (optional; defaults to betterAuthUrl)
+  # - bot-board:ownerEmail (single owner email for Passkey + Email/Password bootstrap)
   # - bot-board:betterAuthSecret (--secret)
-  # - bot-board:githubClientId (--secret)
-  # - bot-board:githubClientSecret (--secret)
   # Optional autonomous worker LLM provider (grok | gemini | meta-muse; default: grok):
   # - bot-board:workerLlmProvider
   # - bot-board:xaiApiKey (--secret) / xaiModel (default: grok-3-mini) / xaiApiUrl

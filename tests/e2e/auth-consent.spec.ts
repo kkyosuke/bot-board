@@ -22,10 +22,11 @@ async function assertAllVisibleButtonsAtLeast44px(page: Page): Promise<void> {
 }
 
 test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BOT-02)", () => {
-  test("renders /sign-in normal, 403 non-owner, and already-signed-in approved states with >=44px targets and zero overflow", async ({
+  test("renders /sign-in bootstrap (0 users), Passkey primary + collapsible Email/Password, 403 non-owner, and approved states with >=44px targets and zero overflow", async ({
     page,
   }) => {
-    // 1. Unauthenticated -> normal GitHub OAuth sign-in screen
+    // 0a. Transient 500 on GET /api/auth/owner-status MUST render explicit error + retry CTA (NEVER silently mask as normal sign-in)
+    let failOwnerStatusOnce = true;
     await page.route("**/api/human/workspace", async (route) => {
       await route.fulfill({
         status: 401,
@@ -33,14 +34,80 @@ test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BO
         body: JSON.stringify({ code: "NOT_AUTHORIZED", message: "Sign-in required" }),
       });
     });
+    await page.route("**/api/auth/owner-status", async (route) => {
+      if (failOwnerStatusOnce) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "Temporary D1 outage" }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ initialized: false }),
+      });
+    });
+    await page.route("**/api/auth/sign-up/email", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ user: { id: "u_owner", email: "owner@example.test" } }),
+      });
+    });
 
-    await page.goto("/sign-in?next=%2Fconsent%3Fclient_id%3Dc1%26sig%3Ds1");
-    await expect(page.getByTestId("github-sign-in-btn")).toBeVisible();
-    await expect(page.getByText("OWNER_GITHUB_ID")).toBeVisible();
+    await page.goto("/sign-in");
+    await expect(page.getByTestId("sign-in-error-alert")).toBeVisible();
+    await expect(page.getByTestId("sign-in-retry-btn")).toBeVisible();
+    await expect(page.getByTestId("sign-in-bootstrap")).toHaveCount(0);
     await assertNoHorizontalOverflow(page);
     await assertAllVisibleButtonsAtLeast44px(page);
 
-    // 1b. OAuth cancel/error query param -> explicit error alert banner
+    // 0b. Clicking retry after owner-status recovers transitions cleanly into one-time OWNER_EMAIL bootstrap wizard
+    failOwnerStatusOnce = false;
+    await page.getByTestId("sign-in-retry-btn").click();
+    await expect(page.getByTestId("sign-in-bootstrap")).toBeVisible();
+    await expect(page.getByTestId("owner-bootstrap-form")).toBeVisible();
+    await expect(page.getByTestId("github-sign-in-btn")).toHaveCount(0);
+    await assertNoHorizontalOverflow(page);
+    await assertAllVisibleButtonsAtLeast44px(page);
+
+    await page.getByTestId("bootstrap-email-input").fill("owner@example.test");
+    await page.getByTestId("bootstrap-password-input").fill("correct-horse-battery-staple");
+    await page.getByTestId("bootstrap-password-confirm-input").fill("correct-horse-battery-staple");
+    await page.getByTestId("bootstrap-submit-btn").click();
+    await expect(page.getByTestId("sign-in-bootstrap-complete")).toBeVisible();
+    await expect(page.getByTestId("bootstrap-register-passkey-btn")).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+    await assertAllVisibleButtonsAtLeast44px(page);
+
+    // 1. Initialized + Unauthenticated -> normal Passkey primary + collapsible Email/Password sign-in screen (ZERO GitHub OAuth)
+    await page.unroute("**/api/auth/owner-status");
+    await page.route("**/api/auth/owner-status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ initialized: true }),
+      });
+    });
+
+    await page.goto("/sign-in?next=%2Fconsent%3Fclient_id%3Dc1%26sig%3Ds1");
+    await expect(page.getByTestId("passkey-sign-in-btn")).toBeVisible();
+    await expect(page.getByTestId("toggle-password-signin-btn")).toBeVisible();
+    await expect(page.getByTestId("email-sign-in-form")).toHaveCount(0);
+    await expect(page.getByTestId("github-sign-in-btn")).toHaveCount(0);
+    await expect(page.getByText("OWNER_EMAIL")).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+    await assertAllVisibleButtonsAtLeast44px(page);
+
+    // Expanding collapsible Email + Password fallback renders inputs & submit >=44px without overflow
+    await page.getByTestId("toggle-password-signin-btn").click();
+    await expect(page.getByTestId("email-sign-in-form")).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+    await assertAllVisibleButtonsAtLeast44px(page);
+
+    // 1b. Auth error query param -> explicit error alert banner
     await page.goto("/sign-in?error=access_denied");
     await expect(page.getByTestId("sign-in-error-alert")).toBeVisible();
     await assertNoHorizontalOverflow(page);
@@ -54,7 +121,7 @@ test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BO
         contentType: "application/json",
         body: JSON.stringify({
           code: "NOT_AUTHORIZED",
-          message: "Only configured single owner GitHub account is allowed.",
+          message: "Only configured single owner email is allowed.",
         }),
       });
     });
@@ -99,10 +166,17 @@ test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BO
         body: JSON.stringify({ code: "NOT_AUTHORIZED", message: "Sign-in required" }),
       });
     });
+    await page.route("**/api/auth/owner-status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ initialized: true }),
+      });
+    });
 
     await page.goto("/consent?client_id=client_chatgpt&scope=openid+tasks:read&sig=valid_sig");
     await expect(page).toHaveURL(/\/sign-in\?next=%2Fconsent/);
-    await expect(page.getByTestId("github-sign-in-btn")).toBeVisible();
+    await expect(page.getByTestId("passkey-sign-in-btn")).toBeVisible();
 
     // 2. 403 non-owner on /consent -> Approve MUST be disabled
     await page.unroute("**/api/human/oauth/consent-context*");
@@ -254,8 +328,15 @@ test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BO
         body: JSON.stringify({ id: "ws_1", is_paused: false, version: 1 }),
       });
     });
+    await page.route("**/api/auth/owner-status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ initialized: true }),
+      });
+    });
 
-    await page.route("**/api/auth/sign-in/social", async (route) => {
+    await page.route("**/api/auth/sign-in/email", async (route) => {
       const raw: unknown = route.request().postDataJSON();
       const parsed =
         raw !== null && typeof raw === "object" && !Array.isArray(raw)
@@ -278,18 +359,21 @@ test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BO
       });
     });
 
-    // 1. Authenticated owner visiting /sign-in with prompt=login MUST see re-auth notice + GitHub button (NOT approved loop)
+    // 1. Authenticated owner visiting /sign-in with prompt=login MUST see re-auth notice + Passkey button (NOT approved loop)
     const reauthQuery =
       "client_id=client_mcp_1&prompt=login&ba_iat=1760000000000&ba_param=client_id&ba_param=prompt&ba_param=ba_iat&ba_param=ba_param&utm_source=noise&sig=sig_reauth";
     await page.goto(`/sign-in?${reauthQuery}`);
     await expect(page.getByTestId("sign-in-reauth-notice")).toBeVisible();
     await expect(page.getByTestId("sign-in-approved")).toHaveCount(0);
-    await expect(page.getByTestId("github-sign-in-btn")).toBeVisible();
+    await expect(page.getByTestId("passkey-sign-in-btn")).toBeVisible();
     await assertNoHorizontalOverflow(page);
     await assertAllVisibleButtonsAtLeast44px(page);
 
-    // Clicking GitHub re-auth MUST forward filtered signed oauth_query (dropping utm_source)
-    await page.getByTestId("github-sign-in-btn").click();
+    // Submitting password re-auth MUST forward filtered signed oauth_query (dropping utm_source)
+    await page.getByTestId("toggle-password-signin-btn").click();
+    await page.getByTestId("signin-email-input").fill("owner@example.test");
+    await page.getByTestId("signin-password-input").fill("correct-horse-battery-staple");
+    await page.getByTestId("email-sign-in-submit-btn").click();
     await expect(page.getByTestId("sign-in-error-alert")).toBeVisible();
     expect(signInPayloads.length).toBe(1);
     const rawForwardedQuery = signInPayloads[0]?.["oauth_query"];
@@ -305,7 +389,7 @@ test.describe("S4 Owner Sign-In (/sign-in) & OAuth 2.1 Consent (/consent) UI (BO
     await expect(page.getByTestId("sign-out-btn")).toBeVisible();
     await assertAllVisibleButtonsAtLeast44px(page);
     await page.getByTestId("sign-out-btn").click();
-    await expect(page.getByTestId("github-sign-in-btn")).toBeVisible();
+    await expect(page.getByTestId("passkey-sign-in-btn")).toBeVisible();
     expect(signOutCalls).toBe(1);
 
     // 3. Zero bot scopes on /consent renders explicit warning and disables Approve

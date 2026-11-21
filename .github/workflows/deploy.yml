@@ -57,13 +57,11 @@ jobs:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
           PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.R2_SECRET_ACCESS_KEY }}
           SMOKE_BOT_TOKEN: ${{ secrets.SMOKE_BOT_TOKEN }}
           # Cloudflare Worker Secrets synced via Pulumi secret_text (strictly from GitHub Secrets)
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_GEMINI_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
@@ -71,7 +69,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           BETTER_AUTH_URL: ${{ vars.BETTER_AUTH_URL || secrets.BETTER_AUTH_URL }}
           TRUSTED_ORIGINS: ${{ vars.TRUSTED_ORIGINS || secrets.TRUSTED_ORIGINS }}
-          OWNER_GITHUB_ID: ${{ vars.OWNER_GITHUB_ID || secrets.OWNER_GITHUB_ID }}
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL || secrets.OWNER_EMAIL }}
           WORKER_LLM_PROVIDER: ${{ vars.WORKER_LLM_PROVIDER || secrets.WORKER_LLM_PROVIDER }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL }}
           GEMINI_API_URL: ${{ vars.GEMINI_API_URL || secrets.GEMINI_API_URL }}

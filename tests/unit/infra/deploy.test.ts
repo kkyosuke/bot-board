@@ -28,6 +28,35 @@ describe("Pulumi deploy secret & backend hardening (infra/deploy.ts)", () => {
     expect("AWS_SECRET_ACCESS_KEY" in sanitized).toBe(false);
   });
 
+  test("maps R2_* credentials to AWS_* when AWS_* are unset/empty, strips blank R2_*, and preserves explicit AWS_* precedence (Minor 7)", () => {
+    const mapped = buildPulumiCommandEnv({
+      AWS_ACCESS_KEY_ID: "",
+      AWS_SECRET_ACCESS_KEY: "   ",
+      R2_ACCESS_KEY_ID: "r2-key-id",
+      R2_SECRET_ACCESS_KEY: "r2-secret-key",
+    });
+    expect(mapped["AWS_ACCESS_KEY_ID"]).toBe("r2-key-id");
+    expect(mapped["AWS_SECRET_ACCESS_KEY"]).toBe("r2-secret-key");
+
+    const explicitAwsWins = buildPulumiCommandEnv({
+      AWS_ACCESS_KEY_ID: "aws-explicit-id",
+      AWS_SECRET_ACCESS_KEY: "aws-explicit-secret",
+      R2_ACCESS_KEY_ID: "r2-fallback-id",
+      R2_SECRET_ACCESS_KEY: "r2-fallback-secret",
+    });
+    expect(explicitAwsWins["AWS_ACCESS_KEY_ID"]).toBe("aws-explicit-id");
+    expect(explicitAwsWins["AWS_SECRET_ACCESS_KEY"]).toBe("aws-explicit-secret");
+
+    const blankR2Stripped = buildPulumiCommandEnv({
+      R2_ACCESS_KEY_ID: "  ",
+      R2_SECRET_ACCESS_KEY: "",
+    });
+    expect("R2_ACCESS_KEY_ID" in blankR2Stripped).toBe(false);
+    expect("R2_SECRET_ACCESS_KEY" in blankR2Stripped).toBe(false);
+    expect("AWS_ACCESS_KEY_ID" in blankR2Stripped).toBe(false);
+    expect("AWS_SECRET_ACCESS_KEY" in blankR2Stripped).toBe(false);
+  });
+
   test("fails closed when a self-hosted PULUMI_BACKEND_URL is configured without a non-empty passphrase", () => {
     for (const backendUrl of [
       "s3://bot-board-state?endpoint=r2.example.com",

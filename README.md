@@ -17,12 +17,12 @@ Botがタスクを管理し、人は判断カードをスワイプして選択�
 
 ## ローカル実行・自動検証・デプロイコマンド
 
-| コマンド                                        | 内容                                                                                                                                                                                                                                       |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bun run verify`                                | 整形・Lint・型検査・docsガードレール・単体/結合テスト・UI/Worker/IaCビルド・静的検証                                                                                                                                                       |
-| `bun run test:e2e`                              | Playwright UI E2E（SP 360px/320px・PC 全6画面）                                                                                                                                                                                            |
-| `bun run test:e2e:fullstack`                    | Playwright フルスタック縦通しE2E（実SPA・Auth・Human API・MCP・SQLite・Queue/DLQ：SP 360/320px・PC）                                                                                                                                       |
-| `bun run dev:full`                              | ローカルフルスタック起動（`http://127.0.0.1:4174`・背景Queue/Cron実行付・実ログインには `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `OWNER_GITHUB_ID`、自律ワーカーには `GEMINI_API_KEY` / `XAI_API_KEY` / `META_MODEL_API_KEY` を設定） |
-| `bun run deploy -- --stack staging`（/ `prod`） | ビルド → Pulumi デプロイ → リモート D1 マイグレーション → 実環境 17 項目スモーク検証を一括実行（GitHub Actions からも実行可：[ランブック](docs/deploy-and-plugins.md)）                                                                    |
+| コマンド                                        | 内容                                                                                                                                                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run verify`                                | 整形・Lint・型検査・docsガードレール・単体/結合テスト・UI/Worker/IaCビルド・静的検証                                                                                                                                |
+| `bun run test:e2e`                              | Playwright UI E2E（SP 360px/320px・PC 全6画面）                                                                                                                                                                     |
+| `bun run test:e2e:fullstack`                    | Playwright フルスタック縦通しE2E（実SPA・Auth・Human API・MCP・SQLite・Queue/DLQ：SP 360/320px・PC）                                                                                                                |
+| `bun run dev:full`                              | ローカルフルスタック起動（`http://localhost:4174`・背景Queue/Cron実行付・初回 `/sign-in` オーナー作成と Passkey に `OWNER_EMAIL`、自律ワーカーには `GEMINI_API_KEY` / `XAI_API_KEY` / `META_MODEL_API_KEY` を設定） |
+| `bun run deploy -- --stack staging`（/ `prod`） | ビルド → Pulumi デプロイ → リモート D1 マイグレーション → 実環境 18 項目スモーク検証を一括実行（GitHub Actions からも実行可：[ランブック](docs/deploy-and-plugins.md)）                                             |
 
 対象は ChatGPT / Claude / Meta Muse / Google Gemini / Grok。Meta Muse は特定済（`#19`完了）、各外部Bot実機接続（`#17`・`#18`・`#20`・`#33`・`#34`）は未実施です。

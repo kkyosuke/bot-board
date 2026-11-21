@@ -86,9 +86,7 @@ export interface WorkerRuntimeEnv {
   readonly BETTER_AUTH_SECRET?: string;
   readonly BETTER_AUTH_URL?: string;
   readonly TRUSTED_ORIGINS?: string;
-  readonly GITHUB_CLIENT_ID?: string;
-  readonly GITHUB_CLIENT_SECRET?: string;
-  readonly OWNER_GITHUB_ID?: string;
+  readonly OWNER_EMAIL?: string;
   readonly WORKER_LLM_PROVIDER?: string;
   readonly XAI_API_KEY?: string;
   readonly XAI_MODEL?: string;
@@ -526,9 +524,7 @@ const workerHandler = {
                   ...(env.TRUSTED_ORIGINS !== undefined
                     ? { trustedOrigins: env.TRUSTED_ORIGINS }
                     : {}),
-                  ...(env.OWNER_GITHUB_ID !== undefined
-                    ? { ownerGithubId: env.OWNER_GITHUB_ID }
-                    : {}),
+                  ...(env.OWNER_EMAIL !== undefined ? { ownerEmail: env.OWNER_EMAIL } : {}),
                   enableMcpOAuth: false,
                 })
               : undefined;
@@ -547,11 +543,7 @@ const workerHandler = {
           : {}),
         ...(env.BETTER_AUTH_URL !== undefined ? { betterAuthUrl: env.BETTER_AUTH_URL } : {}),
         ...(env.TRUSTED_ORIGINS !== undefined ? { trustedOrigins: env.TRUSTED_ORIGINS } : {}),
-        ...(env.GITHUB_CLIENT_ID !== undefined ? { githubClientId: env.GITHUB_CLIENT_ID } : {}),
-        ...(env.GITHUB_CLIENT_SECRET !== undefined
-          ? { githubClientSecret: env.GITHUB_CLIENT_SECRET }
-          : {}),
-        ...(env.OWNER_GITHUB_ID !== undefined ? { ownerGithubId: env.OWNER_GITHUB_ID } : {}),
+        ...(env.OWNER_EMAIL !== undefined ? { ownerEmail: env.OWNER_EMAIL } : {}),
       });
     }
 

@@ -1,9 +1,11 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import {
   type BetterAuthConfig,
   type BetterAuthRuntime,
   createBetterAuth,
+  isValidOwnerEmail,
+  normalizeOwnerEmail,
 } from "@/auth/better-auth";
 import { type OwnerContext } from "@/auth/context";
 import { mintOwnerContext, type OwnerSessionInput } from "@/auth/internal/mint-context";
@@ -30,7 +32,7 @@ export interface AuthenticateOwnerRequestParams {
   readonly db: AppDatabase;
   readonly auth: BetterAuthRuntime;
   readonly request: Request;
-  readonly ownerGithubId?: string;
+  readonly ownerEmail?: string;
 }
 
 export async function authenticateOwnerRequest(
@@ -44,23 +46,22 @@ export async function authenticateOwnerRequest(
     throw new OwnerAuthenticationError(401, "Owner authentication required.");
   }
 
-  const expectedGithubId = params.ownerGithubId?.trim() ?? "";
-  if (expectedGithubId === "") {
-    throw new OwnerAuthenticationError(403, "Workspace owner GitHub ID is not configured.");
+  const expectedOwnerEmail = normalizeOwnerEmail(params.ownerEmail);
+  if (!isValidOwnerEmail(expectedOwnerEmail)) {
+    throw new OwnerAuthenticationError(403, "Workspace owner email is not configured.");
   }
 
-  const githubAccount = await params.db.orm
-    .select({ accountId: schema.account.accountId })
-    .from(schema.account)
-    .where(
-      and(
-        eq(schema.account.userId, sessionResult.user.id),
-        eq(schema.account.providerId, "github"),
-      ),
-    )
+  const ownerUser = await params.db.orm
+    .select({ email: schema.user.email })
+    .from(schema.user)
+    .where(eq(schema.user.id, sessionResult.user.id))
     .get();
 
-  if (githubAccount === undefined || githubAccount.accountId !== expectedGithubId) {
+  if (
+    ownerUser === undefined ||
+    normalizeOwnerEmail(ownerUser.email) !== expectedOwnerEmail ||
+    normalizeOwnerEmail(sessionResult.user.email) !== expectedOwnerEmail
+  ) {
     throw new OwnerAuthenticationError(
       403,
       "Authenticated account does not match the configured workspace owner.",
@@ -129,7 +130,7 @@ export function createLazyAuthAndOwnerFromD1(
         db,
         auth,
         request,
-        ...(config.ownerGithubId !== undefined ? { ownerGithubId: config.ownerGithubId } : {}),
+        ...(config.ownerEmail !== undefined ? { ownerEmail: config.ownerEmail } : {}),
       });
     },
   };

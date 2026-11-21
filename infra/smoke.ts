@@ -334,6 +334,35 @@ export async function runLiveSmokeCheck(options: SmokeCheckOptions): Promise<Smo
     }),
   );
 
+  // 7b. Owner bootstrap status endpoint (proves D1 user table migrated + no-store + non-CORS + zero PII)
+  checks.push(
+    await runSingleCheck("GET /api/auth/owner-status", async () => {
+      const res = await fetchFn(`${origin}/api/auth/owner-status`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status !== 200) {
+        throw new Error(`Expected 200, got ${res.status}`);
+      }
+      const cacheControl = res.headers.get("cache-control") ?? "";
+      if (!cacheControl.toLowerCase().includes("no-store")) {
+        throw new Error(
+          `Missing Cache-Control: no-store on /api/auth/owner-status ("${cacheControl}")`,
+        );
+      }
+      if (res.headers.get("access-control-allow-origin") !== null) {
+        throw new Error("/api/auth/owner-status must not emit Access-Control-Allow-Origin");
+      }
+      const parsed = z
+        .object({ initialized: z.boolean() })
+        .strict()
+        .safeParse(await res.json());
+      if (!parsed.success) {
+        throw new Error("Invalid /api/auth/owner-status payload (expected strict { initialized })");
+      }
+      return `200 initialized=${String(parsed.data.initialized)}`;
+    }),
+  );
+
   // 8. Optional authenticated MCP tool call when SMOKE_BOT_TOKEN is provided
   const trimmedBotToken = options.botToken?.trim() ?? "";
   if (trimmedBotToken !== "") {

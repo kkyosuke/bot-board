@@ -4,7 +4,7 @@ import { type Message, type MessageBatch } from "@cloudflare/workers-types";
 import { eq } from "drizzle-orm";
 
 import {
-  assertAllowedOwnerGithubProfile,
+  assertAllowedOwnerEmail,
   createBetterAuth,
   ensureOwnerWorkspace,
   parseTrustedOrigins,
@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 const ORIGIN = "https://board.example.test";
-const OWNER_GITHUB_ID = "github-owner-42";
+const OWNER_EMAIL = "owner@example.test";
 const AUTH_SECRET = "super-secret-better-auth-test-key-0123456789";
 const D1_MAX_SQL_VARIABLES = 100;
 
@@ -198,7 +198,7 @@ function createMessageBatchStub(
 
 async function setupHumanFixture(options?: {
   readonly rateLimit?: number;
-  readonly ownerGithubId?: string;
+  readonly ownerEmail?: string;
   readonly enableMcpOAuth?: boolean;
 }): Promise<HumanFixture> {
   const sqliteDb = createSqliteDatabase(":memory:");
@@ -216,16 +216,16 @@ async function setupHumanFixture(options?: {
   await sqliteDb.orm.insert(schema.user).values({
     id: ownerUserId,
     name: "Workspace Owner",
-    email: "owner@example.test",
+    email: OWNER_EMAIL,
     emailVerified: true,
     createdAt: new Date(currentNow),
     updatedAt: new Date(currentNow),
   });
 
   await sqliteDb.orm.insert(schema.account).values({
-    id: "acc-owner-gh",
-    accountId: OWNER_GITHUB_ID,
-    providerId: "github",
+    id: "acc-owner-cred",
+    accountId: ownerUserId,
+    providerId: "credential",
     userId: ownerUserId,
     createdAt: new Date(currentNow),
     updatedAt: new Date(currentNow),
@@ -267,13 +267,13 @@ async function setupHumanFixture(options?: {
     },
   };
 
-  const configuredGithubId = options?.ownerGithubId ?? OWNER_GITHUB_ID;
+  const configuredOwnerEmail = options?.ownerEmail ?? OWNER_EMAIL;
   const trustedOrigins = parseTrustedOrigins(ORIGIN);
   const auth = createBetterAuth(db, {
     baseUrl: ORIGIN,
     secret: AUTH_SECRET,
     trustedOrigins,
-    ownerGithubId: configuredGithubId,
+    ownerEmail: configuredOwnerEmail,
     enableMcpOAuth: options?.enableMcpOAuth ?? false,
     now: () => currentNow,
   });
@@ -284,7 +284,7 @@ async function setupHumanFixture(options?: {
       db,
       auth,
       request,
-      ownerGithubId: configuredGithubId,
+      ownerEmail: configuredOwnerEmail,
     });
 
   const rateLimiter =
@@ -462,7 +462,7 @@ async function mcpCall(
 }
 
 describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finalize & Concurrency (DEC-01..04, BOT-02)", () => {
-  test("executes real Better Auth databaseHooks (single-owner, workspace bootstrap, non-GitHub/non-owner rejection) and signed cookie auth (M5, BOT-02)", async () => {
+  test("executes real Better Auth databaseHooks (single-owner OWNER_EMAIL, workspace bootstrap, non-credential/non-owner rejection) and signed cookie auth (M5, BOT-02)", async () => {
     const sqliteDb = createSqliteDatabase(":memory:");
     openDbs.push(sqliteDb);
     await sqliteDb.applyMigrations();
@@ -471,20 +471,32 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
     const auth = createBetterAuth(sqliteDb, {
       baseUrl: ORIGIN,
       secret: AUTH_SECRET,
-      ownerGithubId: OWNER_GITHUB_ID,
+      ownerEmail: OWNER_EMAIL,
       enableMcpOAuth: false,
       now: () => nowMs,
     });
     const internal = (await auth.getAuthContext()).internalAdapter;
 
-    // 1. First user creation triggers user.create.after -> automatic workspace bootstrap!
+    // 0. Non-owner email user creation is rejected by user.create.before
+    await expect(
+      internal.createUser(
+        {
+          email: "intruder@example.test",
+          name: "Intruder",
+          emailVerified: false,
+        },
+        { method: "email" },
+      ),
+    ).rejects.toThrow();
+
+    // 1. First owner user creation triggers user.create.after -> automatic workspace bootstrap!
     const createdOwner = await internal.createUser(
       {
-        email: "sole-owner@example.test",
+        email: OWNER_EMAIL,
         name: "Sole Owner",
         emailVerified: true,
       },
-      { method: "oauth" },
+      { method: "email" },
     );
     const bootstrappedWs = await sqliteDb.orm
       .select()
@@ -498,45 +510,40 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
     await expect(
       internal.createUser(
         {
-          email: "second-user@example.test",
-          name: "Intruder",
+          email: OWNER_EMAIL,
+          name: "Duplicate",
           emailVerified: true,
         },
-        { method: "oauth" },
+        { method: "email" },
       ),
     ).rejects.toThrow();
 
-    // 3. Non-GitHub account creation is blocked by databaseHooks.account.create.before
-    await expect(
-      internal.createAccount({
-        userId: createdOwner.id,
-        providerId: "google",
-        accountId: OWNER_GITHUB_ID,
-      }),
-    ).rejects.toThrow();
-
-    // 4. GitHub account with wrong accountId is blocked by databaseHooks.account.create.before
+    // 3. Non-credential (social) account creation is blocked by databaseHooks.account.create.before
     await expect(
       internal.createAccount({
         userId: createdOwner.id,
         providerId: "github",
-        accountId: "wrong-github-999",
+        accountId: "gh-12345",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      internal.createAccount({
+        userId: createdOwner.id,
+        providerId: "google",
+        accountId: "google-12345",
       }),
     ).rejects.toThrow();
 
-    // 5. Session creation BEFORE owner GitHub account exists is blocked by session.create.before
-    await expect(internal.createSession(createdOwner.id)).rejects.toThrow();
-
-    // 6. Matching OWNER_GITHUB_ID GitHub account succeeds, then session creation succeeds
+    // 4. Matching OWNER_EMAIL credential account succeeds, and session creation succeeds
     await internal.createAccount({
       userId: createdOwner.id,
-      providerId: "github",
-      accountId: OWNER_GITHUB_ID,
+      providerId: "credential",
+      accountId: createdOwner.id,
     });
     const realSession = await internal.createSession(createdOwner.id);
     expect(realSession.userId).toBe(createdOwner.id);
 
-    // 7. Signed Better Auth cookie authenticates cleanly via real auth.getSession + authenticateOwnerRequest
+    // 5. Signed Better Auth cookie authenticates cleanly via real auth.getSession + authenticateOwnerRequest
     const realCookie = await signBetterAuthSessionCookie(realSession.token);
     const ownerCtx = await authenticateOwnerRequest({
       db: sqliteDb,
@@ -544,7 +551,7 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
       request: new Request(`${ORIGIN}/api/human/workspace`, {
         headers: { Cookie: realCookie },
       }),
-      ownerGithubId: OWNER_GITHUB_ID,
+      ownerEmail: OWNER_EMAIL,
     });
     expect(ownerCtx.userId).toBe(createdOwner.id);
     expect(ownerCtx.workspaceId).toBe(bootstrappedWs?.id ?? "");
@@ -557,52 +564,51 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
         request: new Request(`${ORIGIN}/api/human/workspace`, {
           headers: { Cookie: `__Secure-better-auth.session_token=${realSession.token}.invalid` },
         }),
-        ownerGithubId: OWNER_GITHUB_ID,
+        ownerEmail: OWNER_EMAIL,
       }),
     ).rejects.toThrow();
   });
 
-  test("enforces single-owner profile allowlist, 401 vs 403, trustedOrigins CSRF (before owner quota), and IP/owner rate limits (BOT-02, Minors 1-2)", async () => {
+  test("enforces single-owner OWNER_EMAIL allowlist, 401 vs 403, trustedOrigins CSRF (before owner quota), and IP/owner rate limits (BOT-02, Minors 1-2)", async () => {
     expect(() =>
-      assertAllowedOwnerGithubProfile({
-        configuredOwnerGithubId: OWNER_GITHUB_ID,
-        githubAccountId: OWNER_GITHUB_ID,
+      assertAllowedOwnerEmail({
+        configuredOwnerEmail: OWNER_EMAIL,
+        candidateEmail: "  OWNER@EXAMPLE.TEST ",
       }),
     ).not.toThrow();
     expect(() =>
-      assertAllowedOwnerGithubProfile({
-        configuredOwnerGithubId: OWNER_GITHUB_ID,
-        githubAccountId: "attacker-999",
+      assertAllowedOwnerEmail({
+        configuredOwnerEmail: OWNER_EMAIL,
+        candidateEmail: "attacker@example.test",
       }),
     ).toThrow();
     expect(() =>
-      assertAllowedOwnerGithubProfile({
-        configuredOwnerGithubId: "",
-        githubAccountId: OWNER_GITHUB_ID,
+      assertAllowedOwnerEmail({
+        configuredOwnerEmail: "",
+        candidateEmail: OWNER_EMAIL,
       }),
     ).toThrow();
 
     const fx = await setupHumanFixture();
 
-    // Email/password signup is disabled in Better Auth
+    // Free signup by non-owner (or after owner initialized) is forbidden with 403
     const freeSignup = await fx.app.request(`${ORIGIN}/api/auth/sign-up/email`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: ORIGIN },
       body: JSON.stringify({
         name: "Intruder",
         email: "intruder@example.test",
-        password: "Password123!",
+        password: "Password123456!",
       }),
     });
-    expect(freeSignup.status).toBeGreaterThanOrEqual(400);
-    expect(freeSignup.status).toBeLessThan(500);
+    expect(freeSignup.status).toBe(403);
 
     // Unauthenticated /api/human/* returns 401 NOT_AUTHORIZED
     const unauth = await humanReq(fx.app, "GET", "/api/human/workspace", { cookie: null });
     expect(unauth.status).toBe(401);
     expect(unauth.json["code"]).toBe("NOT_AUTHORIZED");
 
-    // Valid signed cookie for a non-owner (mismatched GitHub ID) returns 403 NOT_AUTHORIZED
+    // Valid signed cookie for a non-owner (mismatched email) returns 403 NOT_AUTHORIZED
     await fx.db.orm.insert(schema.user).values({
       id: "user-intruder",
       name: "Intruder",
@@ -612,9 +618,9 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
       updatedAt: new Date(fx.getNow()),
     });
     await fx.db.orm.insert(schema.account).values({
-      id: "acc-intruder-gh",
-      accountId: "github-intruder-999",
-      providerId: "github",
+      id: "acc-intruder-cred",
+      accountId: "user-intruder",
+      providerId: "credential",
       userId: "user-intruder",
       createdAt: new Date(fx.getNow()),
       updatedAt: new Date(fx.getNow()),
@@ -634,8 +640,8 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
     expect(nonOwner.status).toBe(403);
     expect(nonOwner.json["code"]).toBe("NOT_AUTHORIZED");
 
-    // Missing OWNER_GITHUB_ID fails closed with 403
-    const fxNoOwner = await setupHumanFixture({ ownerGithubId: "" });
+    // Missing OWNER_EMAIL fails closed with 403
+    const fxNoOwner = await setupHumanFixture({ ownerEmail: "" });
     const unconfiguredRes = await humanReq(fxNoOwner.app, "GET", "/api/human/workspace", {
       cookie: fxNoOwner.ownerCookie,
     });
@@ -1626,15 +1632,15 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
     await sqliteDb.orm.insert(schema.user).values({
       id: ownerUserId,
       name: "Worker Owner",
-      email: "worker-owner@example.test",
+      email: OWNER_EMAIL,
       emailVerified: true,
       createdAt: new Date(nowMs),
       updatedAt: new Date(nowMs),
     });
     await sqliteDb.orm.insert(schema.account).values({
-      id: "acc-worker-gh",
-      accountId: OWNER_GITHUB_ID,
-      providerId: "github",
+      id: "acc-worker-cred",
+      accountId: ownerUserId,
+      providerId: "credential",
       userId: ownerUserId,
       createdAt: new Date(nowMs),
       updatedAt: new Date(nowMs),
@@ -1674,7 +1680,7 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
       },
       BETTER_AUTH_SECRET: AUTH_SECRET,
       BETTER_AUTH_URL: ORIGIN,
-      OWNER_GITHUB_ID,
+      OWNER_EMAIL,
     };
 
     const execCtx = {
@@ -1700,7 +1706,7 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
         finalizeQueue: baseEnv.DECISION_FINALIZE_QUEUE,
         botWorkQueue: baseEnv.BOT_WORK_QUEUE,
         betterAuthSecret: AUTH_SECRET,
-        ownerGithubId: OWNER_GITHUB_ID,
+        ownerEmail: OWNER_EMAIL,
       },
     );
     expect(failClosedRes.status).toBe(404);
@@ -1936,7 +1942,7 @@ describe("S3 Better Auth Single-Owner, Human API (13 endpoints), 5s Undo/Finaliz
     const authWithWaitUntil = createBetterAuth(sqliteDb, {
       baseUrl: ORIGIN,
       secret: AUTH_SECRET,
-      ownerGithubId: OWNER_GITHUB_ID,
+      ownerEmail: OWNER_EMAIL,
       enableMcpOAuth: false,
       waitUntil: (p) => {
         wiredWaitUntil.push(p);

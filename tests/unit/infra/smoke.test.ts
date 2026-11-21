@@ -227,6 +227,18 @@ function buildMockLiveFetch(options: { readonly failJwks?: boolean } = {}): Smok
       );
     }
 
+    if (url.pathname === "/api/auth/owner-status") {
+      return Promise.resolve(
+        new Response(JSON.stringify({ initialized: false }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+          },
+        }),
+      );
+    }
+
     return Promise.resolve(new Response("Not Found", { status: 404 }));
   };
 }
@@ -271,7 +283,7 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
         BETTER_AUTH_SECRET: "smoke-test-better-auth-secret-0123456789",
         BETTER_AUTH_URL: origin,
         TRUSTED_ORIGINS: origin,
-        OWNER_GITHUB_ID: "gh-owner-smoke",
+        OWNER_EMAIL: "owner@smoke.test",
         APP_ENV: "staging",
       };
 
@@ -302,7 +314,7 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
       const failed = report.checks.filter((c) => !c.ok);
       expect(failed).toEqual([]);
       expect(report.ok).toBe(true);
-      expect(report.checks.length).toBe(17);
+      expect(report.checks.length).toBe(18);
       expect(seenSpaNavigateHeaders).toEqual({
         "/": "navigate",
         "/board": "navigate",
@@ -332,7 +344,7 @@ describe("Post-deploy live smoke check (infra/smoke.ts, M3, R2-B1)", () => {
       fetchImpl: buildMockLiveFetch(),
     });
     expect(okReport.ok).toBe(true);
-    expect(okReport.checks.length).toBe(18);
+    expect(okReport.checks.length).toBe(19);
 
     const failReport = await runLiveSmokeCheck({
       baseUrl: "https://staging.bot-board.example.com",

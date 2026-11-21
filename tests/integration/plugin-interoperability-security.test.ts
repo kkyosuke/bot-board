@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 const ORIGIN = "https://board.example.test";
-const OWNER_GITHUB_ID = "777001";
+const OWNER_EMAIL = "owner@example.test";
 const AUTH_SECRET = "plugin-interop-security-secret-key-0123456789abcdef";
 
 function normalizeParam(v: unknown): string | number | null | Uint8Array {
@@ -120,6 +120,138 @@ async function sha256Base64Url(input: string): Promise<string> {
   return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  return bytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function encodeDerInteger(raw: Uint8Array): Uint8Array {
+  let start = 0;
+  while (start < raw.length - 1 && raw[start] === 0) {
+    start += 1;
+  }
+  const trimmed = raw.slice(start);
+  const needsZeroPad = (trimmed[0] ?? 0) >= 0x80;
+  const out = new Uint8Array(2 + (needsZeroPad ? 1 : 0) + trimmed.length);
+  out[0] = 0x02;
+  out[1] = trimmed.length + (needsZeroPad ? 1 : 0);
+  if (needsZeroPad) {
+    out[2] = 0x00;
+    out.set(trimmed, 3);
+  } else {
+    out.set(trimmed, 2);
+  }
+  return out;
+}
+
+function rawEcdsaSignatureToDer(rawSig: Uint8Array): Uint8Array {
+  const half = rawSig.length / 2;
+  const r = encodeDerInteger(rawSig.slice(0, half));
+  const s = encodeDerInteger(rawSig.slice(half));
+  const seq = new Uint8Array(2 + r.length + s.length);
+  seq[0] = 0x30;
+  seq[1] = r.length + s.length;
+  seq.set(r, 2);
+  seq.set(s, 2 + r.length);
+  return seq;
+}
+
+async function generateTestWebAuthnP256Key(): Promise<{
+  readonly privateKey: CryptoKey;
+  readonly cosePublicKeyBase64: string;
+}> {
+  const generated = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ]);
+  if (!("privateKey" in generated) || !("publicKey" in generated)) {
+    throw new Error("Expected ECDSA CryptoKeyPair");
+  }
+  const rawPub = new Uint8Array(await crypto.subtle.exportKey("raw", generated.publicKey));
+  const x = rawPub.slice(1, 33);
+  const y = rawPub.slice(33, 65);
+  // Minimal CBOR COSE EC2 P-256 ES256 key map: {1: 2, 3: -7, -1: 1, -2: x, -3: y}
+  const cose = new Uint8Array([
+    0xa5,
+    0x01,
+    0x02,
+    0x03,
+    0x26,
+    0x20,
+    0x01,
+    0x21,
+    0x58,
+    0x20,
+    ...x,
+    0x22,
+    0x58,
+    0x20,
+    ...y,
+  ]);
+  return {
+    privateKey: generated.privateKey,
+    cosePublicKeyBase64: bytesToBase64(cose),
+  };
+}
+
+async function buildSignedWebAuthnAssertion(params: {
+  readonly credentialId: string;
+  readonly challenge: string;
+  readonly origin: string;
+  readonly rpId: string;
+  readonly counter: number;
+  readonly privateKey: CryptoKey;
+}): Promise<Record<string, unknown>> {
+  const clientDataBytes = new TextEncoder().encode(
+    JSON.stringify({
+      type: "webauthn.get",
+      challenge: params.challenge,
+      origin: params.origin,
+      crossOrigin: false,
+    }),
+  );
+  const clientDataHash = new Uint8Array(await crypto.subtle.digest("SHA-256", clientDataBytes));
+  const rpIdHash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(params.rpId)),
+  );
+  const authData = new Uint8Array(37);
+  authData.set(rpIdHash, 0);
+  authData[32] = 0x05; // UP (0x01) | UV (0x04)
+  new DataView(authData.buffer).setUint32(33, params.counter, false);
+
+  const signedPayload = new Uint8Array(authData.length + clientDataHash.length);
+  signedPayload.set(authData, 0);
+  signedPayload.set(clientDataHash, authData.length);
+
+  const rawSig = new Uint8Array(
+    await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, params.privateKey, signedPayload),
+  );
+  const derSig = rawEcdsaSignatureToDer(rawSig);
+
+  return {
+    id: params.credentialId,
+    rawId: params.credentialId,
+    type: "public-key",
+    response: {
+      authenticatorData: bytesToBase64Url(authData),
+      clientDataJSON: bytesToBase64Url(clientDataBytes),
+      signature: bytesToBase64Url(derSig),
+    },
+    clientExtensionResults: {},
+  };
+}
+
+function extractCookieHeader(res: Response): string {
+  const cookies = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  return cookies
+    .map((entry) => entry.split(";")[0]?.trim() ?? "")
+    .filter((pair) => pair !== "")
+    .join("; ");
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     return Object.fromEntries(Object.entries(value));
@@ -161,15 +293,15 @@ async function setupEnv(options: { readonly seedOwner?: boolean } = {}) {
     await sqliteDb.orm.insert(schema.user).values({
       id: ownerUserId,
       name: "Sole Owner",
-      email: "owner@example.test",
+      email: OWNER_EMAIL,
       emailVerified: true,
       createdAt: new Date(nowMs),
       updatedAt: new Date(nowMs),
     });
     await sqliteDb.orm.insert(schema.account).values({
-      id: "acc-plugin-owner-gh",
-      accountId: OWNER_GITHUB_ID,
-      providerId: "github",
+      id: "acc-plugin-owner-cred",
+      accountId: ownerUserId,
+      providerId: "credential",
       userId: ownerUserId,
       createdAt: new Date(nowMs),
       updatedAt: new Date(nowMs),
@@ -203,9 +335,7 @@ async function setupEnv(options: { readonly seedOwner?: boolean } = {}) {
     BETTER_AUTH_SECRET: AUTH_SECRET,
     BETTER_AUTH_URL: ORIGIN,
     TRUSTED_ORIGINS: ORIGIN,
-    GITHUB_CLIENT_ID: "gh_client_test_id",
-    GITHUB_CLIENT_SECRET: "gh_client_test_secret",
-    OWNER_GITHUB_ID,
+    OWNER_EMAIL,
     APP_ENV: "staging",
   };
 
@@ -296,12 +426,21 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
       expect(optRes.headers.get("Access-Control-Allow-Credentials")).toBeNull();
     }
 
-    // 3. Cookie-authenticated routes MUST NEVER emit Access-Control-Allow-Origin
+    // 3. Cookie-authenticated, email-auth, owner-status, and Passkey routes MUST NEVER emit CORS headers and MUST emit Cache-Control: no-store
     const cookieRoutes: ReadonlyArray<{ readonly method: string; readonly path: string }> = [
       { method: "GET", path: "/api/human/workspace" },
       { method: "GET", path: "/api/auth/get-session" },
-      { method: "POST", path: "/api/auth/sign-in/social" },
+      { method: "GET", path: "/api/auth/owner-status" },
+      { method: "POST", path: "/api/auth/sign-up/email" },
+      { method: "POST", path: "/api/auth/sign-in/email" },
       { method: "POST", path: "/api/auth/oauth2/consent" },
+      { method: "GET", path: "/api/auth/passkey/generate-register-options" },
+      { method: "POST", path: "/api/auth/passkey/verify-registration" },
+      { method: "GET", path: "/api/auth/passkey/generate-authenticate-options" },
+      { method: "POST", path: "/api/auth/passkey/verify-authentication" },
+      { method: "GET", path: "/api/auth/passkey/list-user-passkeys" },
+      { method: "POST", path: "/api/auth/passkey/delete-passkey" },
+      { method: "POST", path: "/api/auth/passkey/update-passkey" },
     ];
     for (const route of cookieRoutes) {
       const res = await workerFetch(
@@ -317,6 +456,7 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
       );
       expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
       expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
     }
   });
 
@@ -396,11 +536,25 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
     }
   });
 
-  test("redirects non-owner GET /api/auth/callback/github with 302 to /sign-in?error=NOT_AUTHORIZED and creates 0 D1 rows (Sec-B2)", async () => {
+  test("rejects non-owner email signup with 403 (0 D1 rows), confirms GitHub social sign-in is removed, and serves GET /api/auth/owner-status without CORS or email leakage (BOT-02)", async () => {
     const { sqliteDb, workerFetch } = await setupEnv({ seedOwner: false });
 
-    // Step 1: Start GitHub OAuth flow via POST /api/auth/sign-in/social
-    const startRes = await workerFetch(
+    // 1. Uninitialized owner-status returns { initialized: false } with no-store & zero CORS
+    const statusBefore = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/owner-status`, {
+        method: "GET",
+        headers: { Origin: "https://evil.example" },
+      }),
+    );
+    expect(statusBefore.status).toBe(200);
+    expect(statusBefore.headers.get("Cache-Control")).toBe("no-store");
+    expect(statusBefore.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    const statusBeforeText = await statusBefore.text();
+    expect(statusBeforeText).not.toContain(OWNER_EMAIL);
+    expect(toRecord(JSON.parse(statusBeforeText))["initialized"]).toBe(false);
+
+    // 2. GitHub OAuth social provider is completely removed (must fail with 4xx)
+    const removedGithub = await workerFetch(
       new Request(`${ORIGIN}/api/auth/sign-in/social`, {
         method: "POST",
         headers: {
@@ -410,201 +564,140 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
         body: JSON.stringify({
           provider: "github",
           callbackURL: `${ORIGIN}/`,
-          errorCallbackURL: `${ORIGIN}/sign-in`,
         }),
       }),
     );
-    expect(startRes.status).toBe(200);
-    const startJson = toRecord(await startRes.json());
-    const ghAuthUrl = new URL(readStr(startJson, "url"));
-    const state = ghAuthUrl.searchParams.get("state") ?? "";
-    expect(state).not.toBe("");
+    expect(removedGithub.status).toBeGreaterThanOrEqual(400);
+    expect(removedGithub.status).toBeLessThan(500);
+    expect(removedGithub.headers.get("Access-Control-Allow-Origin")).toBeNull();
 
-    const rawSetCookies =
-      typeof startRes.headers.getSetCookie === "function" ? startRes.headers.getSetCookie() : [];
-    const cookieHeader = rawSetCookies
-      .map((entry) => entry.split(";")[0]?.trim() ?? "")
-      .filter((pair) => pair !== "")
-      .join("; ");
-
-    // Step 2: Intercept outbound GitHub token & profile endpoints to return a NON-OWNER GitHub ID
-    const originalFetch = globalThis.fetch;
-    const mockedFetch = Object.assign(
-      async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-        const urlStr =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (urlStr.startsWith("https://github.com/login/oauth/access_token")) {
-          return new Response(
-            JSON.stringify({
-              access_token: "gho_non_owner_token",
-              token_type: "bearer",
-              scope: "read:user,user:email",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (urlStr === "https://api.github.com/user") {
-          return new Response(
-            JSON.stringify({
-              id: 999888, // Does NOT match OWNER_GITHUB_ID ("777001")
-              login: "intruder-gh",
-              name: "Intruder User",
-              email: "intruder@example.test",
-              avatar_url: "https://avatars.githubusercontent.com/u/999888",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (urlStr === "https://api.github.com/user/emails") {
-          return new Response(
-            JSON.stringify([{ email: "intruder@example.test", primary: true, verified: true }]),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        return await originalFetch(input, init);
-      },
-      { preconnect: originalFetch.preconnect },
+    // 3. Non-owner email signup is rejected 403 NOT_AUTHORIZED with 0 D1 rows created
+    const nonOwnerSignup = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          name: "Intruder",
+          email: "intruder@example.test",
+          password: "correct-horse-battery-staple",
+        }),
+      }),
     );
+    expect(nonOwnerSignup.status).toBe(403);
+    expect(nonOwnerSignup.headers.get("Cache-Control")).toBe("no-store");
+    expect(nonOwnerSignup.headers.get("Access-Control-Allow-Origin")).toBeNull();
 
-    globalThis.fetch = mockedFetch;
-    try {
-      const cbRes = await workerFetch(
-        new Request(
-          `${ORIGIN}/api/auth/callback/github?code=gh_auth_code_1&state=${encodeURIComponent(state)}`,
-          {
-            method: "GET",
-            headers: cookieHeader !== "" ? { Cookie: cookieHeader } : {},
-          },
-        ),
-      );
-      expect(cbRes.status).toBe(302);
-      const location = cbRes.headers.get("Location") ?? "";
-      const redirectUrl = new URL(location, ORIGIN);
-      expect(redirectUrl.origin).toBe(ORIGIN);
-      expect(redirectUrl.pathname).toBe("/sign-in");
-      expect(redirectUrl.searchParams.get("error")).toBe("NOT_AUTHORIZED");
-      expect(cbRes.headers.get("Cache-Control")).toBe("no-store");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-
-    // Zero rows created across user / account / session / workspaces
     expect((await sqliteDb.orm.select().from(schema.user).all()).length).toBe(0);
     expect((await sqliteDb.orm.select().from(schema.account).all()).length).toBe(0);
     expect((await sqliteDb.orm.select().from(schema.session).all()).length).toBe(0);
     expect((await sqliteDb.orm.select().from(schema.workspaces).all()).length).toBe(0);
   });
 
-  test("bootstraps first-time owner via GET /api/auth/callback/github (including private email /user/emails fallback) and authorizes /api/human/workspace (m3)", async () => {
+  test("bootstraps first-time owner via POST /api/auth/sign-up/email, permanently locks 2nd signup, authorizes /api/human/workspace, and serves Passkey endpoints with zero CORS (BOT-02)", async () => {
     const { sqliteDb, workerFetch } = await setupEnv({ seedOwner: false });
 
-    const startRes = await workerFetch(
-      new Request(`${ORIGIN}/api/auth/sign-in/social`, {
+    // 1. Short password (<12 chars) is rejected even for OWNER_EMAIL
+    const shortPwRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-up/email`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Origin: ORIGIN,
         },
         body: JSON.stringify({
-          provider: "github",
-          callbackURL: `${ORIGIN}/`,
-          errorCallbackURL: `${ORIGIN}/sign-in`,
+          name: "Sole Owner",
+          email: OWNER_EMAIL,
+          password: "short-pw",
         }),
       }),
     );
-    expect(startRes.status).toBe(200);
-    const ghAuthUrl = new URL(readStr(toRecord(await startRes.json()), "url"));
-    const state = ghAuthUrl.searchParams.get("state") ?? "";
-    expect(state).not.toBe("");
+    expect(shortPwRes.status).toBe(400);
+    expect((await sqliteDb.orm.select().from(schema.user).all()).length).toBe(0);
 
-    const rawSetCookies =
-      typeof startRes.headers.getSetCookie === "function" ? startRes.headers.getSetCookie() : [];
-    const cookieHeader = rawSetCookies
-      .map((entry) => entry.split(";")[0]?.trim() ?? "")
-      .filter((pair) => pair !== "")
-      .join("; ");
-
-    const originalFetch = globalThis.fetch;
-    const mockedFetch = Object.assign(
-      async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-        const urlStr =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (urlStr.startsWith("https://github.com/login/oauth/access_token")) {
-          return new Response(
-            JSON.stringify({
-              access_token: "gho_owner_valid_token",
-              token_type: "bearer",
-              scope: "read:user,user:email",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (urlStr === "https://api.github.com/user") {
-          return new Response(
-            JSON.stringify({
-              id: Number(OWNER_GITHUB_ID),
-              login: "sole-owner-gh",
-              name: "Sole Owner",
-              email: null, // Exercises GitHub private email /user/emails fallback
-              avatar_url: "https://avatars.githubusercontent.com/u/777001",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (urlStr === "https://api.github.com/user/emails") {
-          return new Response(
-            JSON.stringify([
-              { email: "owner-private@example.test", primary: true, verified: true },
-            ]),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        return await originalFetch(input, init);
-      },
-      { preconnect: originalFetch.preconnect },
+    // 2. First-time OWNER_EMAIL signup (case-insensitive) succeeds, creates workspace, and sets signed session cookie
+    const ownerPassword = "correct-horse-battery-staple-2026";
+    const signupRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          name: "Sole Owner",
+          email: "Owner@Example.Test",
+          password: ownerPassword,
+        }),
+      }),
     );
+    expect(signupRes.status).toBe(200);
+    expect(signupRes.headers.get("Cache-Control")).toBe("no-store");
+    expect(signupRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
 
-    let sessionCookieHeader: string;
-    globalThis.fetch = mockedFetch;
-    try {
-      const cbRes = await workerFetch(
-        new Request(
-          `${ORIGIN}/api/auth/callback/github?code=gh_owner_code_1&state=${encodeURIComponent(state)}`,
-          {
-            method: "GET",
-            headers: cookieHeader !== "" ? { Cookie: cookieHeader } : {},
-          },
-        ),
-      );
-      expect(cbRes.status).toBe(302);
-      const location = cbRes.headers.get("Location") ?? "";
-      const redirectUrl = new URL(location, ORIGIN);
-      expect(redirectUrl.origin).toBe(ORIGIN);
-      expect(redirectUrl.pathname).toBe("/");
-      expect(cbRes.headers.get("Cache-Control")).toBe("no-store");
+    const signupCookies =
+      typeof signupRes.headers.getSetCookie === "function" ? signupRes.headers.getSetCookie() : [];
+    const sessionCookieHeader = signupCookies
+      .map((entry) => entry.split(";")[0]?.trim() ?? "")
+      .filter((pair) => pair.includes("session_token="))
+      .join("; ");
+    expect(sessionCookieHeader).toContain("session_token=");
 
-      const cbCookies =
-        typeof cbRes.headers.getSetCookie === "function" ? cbRes.headers.getSetCookie() : [];
-      sessionCookieHeader = cbCookies
-        .map((entry) => entry.split(";")[0]?.trim() ?? "")
-        .filter((pair) => pair.includes("session_token="))
-        .join("; ");
-      expect(sessionCookieHeader).toContain("session_token=");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-
+    // Verify canonical lowercase user, credential account, session, and auto-created workspace
     const users = await sqliteDb.orm.select().from(schema.user).all();
     const accounts = await sqliteDb.orm.select().from(schema.account).all();
     const sessions = await sqliteDb.orm.select().from(schema.session).all();
     const workspaces = await sqliteDb.orm.select().from(schema.workspaces).all();
     expect(users.length).toBe(1);
-    expect(users[0]?.email).toBe("owner-private@example.test");
+    expect(users[0]?.email).toBe(OWNER_EMAIL);
     expect(accounts.length).toBe(1);
-    expect(accounts[0]?.accountId).toBe(OWNER_GITHUB_ID);
+    expect(accounts[0]?.providerId).toBe("credential");
     expect(sessions.length).toBe(1);
     expect(workspaces.length).toBe(1);
 
+    // 3. owner-status flips to { initialized: true }
+    const statusAfter = await workerFetch(new Request(`${ORIGIN}/api/auth/owner-status`));
+    expect(statusAfter.status).toBe(200);
+    expect(toRecord(await statusAfter.json())["initialized"]).toBe(true);
+
+    // 4. Subsequent signup attempts are permanently locked with identical 403 for OWNER_EMAIL & non-owner (zero enumeration oracle; M1)
+    const duplicateOwnerSignup = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          name: "Duplicate Owner",
+          email: OWNER_EMAIL,
+          password: ownerPassword,
+        }),
+      }),
+    );
+    const duplicateIntruderSignup = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          name: "Duplicate Intruder",
+          email: "intruder@example.test",
+          password: ownerPassword,
+        }),
+      }),
+    );
+    expect(duplicateOwnerSignup.status).toBe(403);
+    expect(duplicateIntruderSignup.status).toBe(403);
+    const duplicateOwnerBody = await duplicateOwnerSignup.text();
+    const duplicateIntruderBody = await duplicateIntruderSignup.text();
+    expect(duplicateIntruderBody).toBe(duplicateOwnerBody);
+
+    // 5. Session authorizes /api/human/workspace
     const wsRes = await workerFetch(
       new Request(`${ORIGIN}/api/human/workspace`, {
         headers: { Cookie: sessionCookieHeader },
@@ -613,6 +706,468 @@ describe("Track 2 Plugin Interoperability, CORS Boundaries, Security Headers, No
     expect(wsRes.status).toBe(200);
     const wsJson = toRecord(await wsRes.json());
     expect(wsJson["id"]).toBe(workspaces[0]?.id);
+
+    // 6. Better Auth Passkey endpoints: unauthenticated register/list blocked (401); authenticated owner succeeds with rpID & zero CORS
+    const unauthRegisterOpts = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/generate-register-options`),
+    );
+    expect(unauthRegisterOpts.status).toBe(401);
+    expect(unauthRegisterOpts.headers.get("Access-Control-Allow-Origin")).toBeNull();
+
+    const unauthListPk = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/list-user-passkeys`),
+    );
+    expect(unauthListPk.status).toBe(401);
+
+    const ownerRegisterOpts = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/generate-register-options?name=iPhone`, {
+        headers: { Cookie: sessionCookieHeader, Origin: ORIGIN },
+      }),
+    );
+    expect(ownerRegisterOpts.status).toBe(200);
+    expect(ownerRegisterOpts.headers.get("Cache-Control")).toBe("no-store");
+    expect(ownerRegisterOpts.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    const regOptsJson = toRecord(await ownerRegisterOpts.json());
+    expect(typeof regOptsJson["challenge"]).toBe("string");
+    expect(readStr(toRecord(regOptsJson["rp"]), "id")).toBe("board.example.test");
+    expect(readStr(toRecord(regOptsJson["rp"]), "name")).toBe("bot-board");
+    expect(readStr(toRecord(regOptsJson["authenticatorSelection"]), "residentKey")).toBe(
+      "required",
+    );
+
+    const ownerListPk = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/list-user-passkeys`, {
+        headers: { Cookie: sessionCookieHeader },
+      }),
+    );
+    expect(ownerListPk.status).toBe(200);
+    expect(ownerListPk.headers.get("Cache-Control")).toBe("no-store");
+    expect(ownerListPk.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(await ownerListPk.json()).toEqual([]);
+
+    const authOptsRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/generate-authenticate-options`, {
+        headers: { Origin: ORIGIN },
+      }),
+    );
+    expect(authOptsRes.status).toBe(200);
+    expect(authOptsRes.headers.get("Cache-Control")).toBe("no-store");
+    expect(authOptsRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    const authOptsJson = toRecord(await authOptsRes.json());
+    expect(typeof authOptsJson["challenge"]).toBe("string");
+    expect(authOptsJson["rpId"]).toBe("board.example.test");
+
+    // 7. Sign-out + Email/Password recovery sign-in issues a fresh valid session cookie
+    const signOutRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-out`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+          Cookie: sessionCookieHeader,
+        },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(signOutRes.status).toBe(200);
+
+    const signInRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          email: OWNER_EMAIL,
+          password: ownerPassword,
+        }),
+      }),
+    );
+    expect(signInRes.status).toBe(200);
+    expect(signInRes.headers.get("Cache-Control")).toBe("no-store");
+    expect(signInRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    const freshCookies =
+      typeof signInRes.headers.getSetCookie === "function" ? signInRes.headers.getSetCookie() : [];
+    const freshSessionCookie = freshCookies
+      .map((entry) => entry.split(";")[0]?.trim() ?? "")
+      .filter((pair) => pair.includes("session_token="))
+      .join("; ");
+    expect(freshSessionCookie).toContain("session_token=");
+
+    const wsAfterSignIn = await workerFetch(
+      new Request(`${ORIGIN}/api/human/workspace`, {
+        headers: { Cookie: freshSessionCookie },
+      }),
+    );
+    expect(wsAfterSignIn.status).toBe(200);
+  });
+
+  test("enforces Passkey authz on all 5 authenticated routes (401 unauth / 403 non-owner), verifies real WebAuthn P-256 passkey + OAuth 2.1 oauth_query resumption, blocks tampered oauth_query & non-owner passkey sessions, and deletes passkeys (BOT-02, M3)", async () => {
+    const { sqliteDb, workerFetch } = await setupEnv({ seedOwner: false });
+    const ownerPassword = "correct-horse-battery-staple-2026";
+
+    // 1. Bootstrap owner via real POST /api/auth/sign-up/email so scrypt credential + workspace exist
+    const bootstrapRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+        },
+        body: JSON.stringify({
+          name: "Sole Owner",
+          email: OWNER_EMAIL,
+          password: ownerPassword,
+        }),
+      }),
+    );
+    expect(bootstrapRes.status).toBe(200);
+    const ownerUserRow = await sqliteDb.orm
+      .select({ id: schema.user.id })
+      .from(schema.user)
+      .where(eq(schema.user.email, OWNER_EMAIL))
+      .get();
+    expect(ownerUserRow).toBeDefined();
+    const ownerUserId = ownerUserRow?.id ?? "";
+
+    // 2. Seed a non-owner user + signed session cookie directly into D1 to test defense-in-depth authz
+    const nowMs = Date.now();
+    const nonOwnerUserId = "user-intruder-defense-in-depth";
+    const nonOwnerSessionToken = "sess-intruder-token-1";
+    await sqliteDb.orm.insert(schema.user).values({
+      id: nonOwnerUserId,
+      name: "Intruder User",
+      email: "intruder@example.test",
+      emailVerified: true,
+      createdAt: new Date(nowMs),
+      updatedAt: new Date(nowMs),
+    });
+    await sqliteDb.orm.insert(schema.session).values({
+      id: "sess-intruder-1",
+      token: nonOwnerSessionToken,
+      userId: nonOwnerUserId,
+      expiresAt: new Date(nowMs + 86_400_000),
+      createdAt: new Date(nowMs),
+      updatedAt: new Date(nowMs),
+    });
+    const nonOwnerCookie = await signBetterAuthSessionCookie(nonOwnerSessionToken);
+
+    // 3. All 5 PASSKEY_AUTHENTICATED_PATHS MUST return 401 unauthenticated AND 403 for non-owner sessions
+    const passkeyManagementRoutes: ReadonlyArray<{
+      readonly method: "GET" | "POST";
+      readonly path: string;
+      readonly body?: Record<string, unknown>;
+    }> = [
+      { method: "GET", path: "/api/auth/passkey/generate-register-options" },
+      {
+        method: "POST",
+        path: "/api/auth/passkey/verify-registration",
+        body: { response: {} },
+      },
+      { method: "GET", path: "/api/auth/passkey/list-user-passkeys" },
+      {
+        method: "POST",
+        path: "/api/auth/passkey/delete-passkey",
+        body: { id: "pk_missing" },
+      },
+      {
+        method: "POST",
+        path: "/api/auth/passkey/update-passkey",
+        body: { id: "pk_missing", name: "Hijacked" },
+      },
+    ];
+    for (const route of passkeyManagementRoutes) {
+      const unauthRes = await workerFetch(
+        new Request(`${ORIGIN}${route.path}`, {
+          method: route.method,
+          headers: {
+            Origin: ORIGIN,
+            ...(route.method === "POST" ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(route.body !== undefined ? { body: JSON.stringify(route.body) } : {}),
+        }),
+      );
+      expect(unauthRes.status).toBe(401);
+      expect(unauthRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+      expect(unauthRes.headers.get("Cache-Control")).toBe("no-store");
+
+      const nonOwnerRes = await workerFetch(
+        new Request(`${ORIGIN}${route.path}`, {
+          method: route.method,
+          headers: {
+            Origin: ORIGIN,
+            Cookie: nonOwnerCookie,
+            ...(route.method === "POST" ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(route.body !== undefined ? { body: JSON.stringify(route.body) } : {}),
+        }),
+      );
+      expect(nonOwnerRes.status).toBe(403);
+      expect(nonOwnerRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+      expect(nonOwnerRes.headers.get("Cache-Control")).toBe("no-store");
+    }
+
+    // 4. Register DCR client and trigger unauthenticated /api/auth/oauth2/authorize -> /sign-in?<signed-oauth-query>
+    const dcrRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/oauth2/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_name: "Passkey OAuth Resume Client",
+          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+        }),
+      }),
+    );
+    expect(dcrRes.status).toBe(201);
+    const clientId = readStr(toRecord(await dcrRes.json()), "client_id");
+
+    const fetchSignedOAuthQuery = async (stateTag: string): Promise<string> => {
+      const verifier = `pkce-verifier-${stateTag}-0123456789abcdefghijklmnopqrstuvwxyz`;
+      const challenge = await sha256Base64Url(verifier);
+      const authzUrl = new URL(`${ORIGIN}/api/auth/oauth2/authorize`);
+      authzUrl.searchParams.set("response_type", "code");
+      authzUrl.searchParams.set("client_id", clientId);
+      authzUrl.searchParams.set("redirect_uri", "https://claude.ai/api/mcp/auth_callback");
+      authzUrl.searchParams.set("scope", "openid tasks:read");
+      authzUrl.searchParams.set("code_challenge", challenge);
+      authzUrl.searchParams.set("code_challenge_method", "S256");
+      authzUrl.searchParams.set("state", stateTag);
+
+      const authzRes = await workerFetch(new Request(authzUrl.toString(), { method: "GET" }));
+      expect(authzRes.status).toBe(302);
+      const loc = new URL(authzRes.headers.get("Location") ?? "", ORIGIN);
+      expect(loc.pathname).toBe("/sign-in");
+      expect(loc.searchParams.has("sig")).toBe(true);
+      return loc.search.slice(1);
+    };
+
+    const emailOAuthQuery = await fetchSignedOAuthQuery("st-email-resume");
+
+    // 4a. Tampered oauth_query MUST be rejected (400) on POST /api/auth/sign-in/email
+    const tamperedEmailRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: ORIGIN },
+        body: JSON.stringify({
+          email: OWNER_EMAIL,
+          password: ownerPassword,
+          oauth_query: `${emailOAuthQuery}&scope=tampered`,
+        }),
+      }),
+    );
+    expect(tamperedEmailRes.status).toBe(400);
+
+    // 4b. Real signed oauth_query on POST /api/auth/sign-in/email resumes OAuth -> 200 { redirect: true, url: "/consent?..." }
+    const emailResumeRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: ORIGIN },
+        body: JSON.stringify({
+          email: OWNER_EMAIL,
+          password: ownerPassword,
+          oauth_query: emailOAuthQuery,
+        }),
+      }),
+    );
+    expect(emailResumeRes.status).toBe(200);
+    const emailResumeJson = toRecord(await emailResumeRes.json());
+    expect(emailResumeJson["redirect"]).toBe(true);
+    expect(readStr(emailResumeJson, "url")).toStartWith("/consent?");
+
+    // 5. Seed real P-256 ECDSA WebAuthn passkeys for owner AND non-owner
+    const ownerKey = await generateTestWebAuthnP256Key();
+    const nonOwnerKey = await generateTestWebAuthnP256Key();
+    const ownerCredId = "cred_owner_p256_1";
+    const nonOwnerCredId = "cred_intruder_p256_1";
+
+    await sqliteDb.orm.insert(schema.passkey).values([
+      {
+        id: "pk_owner_real_1",
+        name: "Owner iPhone (Face ID)",
+        publicKey: ownerKey.cosePublicKeyBase64,
+        userId: ownerUserId,
+        credentialID: ownerCredId,
+        counter: 0,
+        deviceType: "multiDevice",
+        backedUp: true,
+        transports: "internal,hybrid",
+        createdAt: new Date(nowMs),
+      },
+      {
+        id: "pk_intruder_real_1",
+        name: "Intruder Key",
+        publicKey: nonOwnerKey.cosePublicKeyBase64,
+        userId: nonOwnerUserId,
+        credentialID: nonOwnerCredId,
+        counter: 0,
+        deviceType: "multiDevice",
+        backedUp: true,
+        transports: "internal",
+        createdAt: new Date(nowMs),
+      },
+    ]);
+
+    const requestAuthChallenge = async (): Promise<{
+      readonly challenge: string;
+      readonly challengeCookie: string;
+    }> => {
+      const res = await workerFetch(
+        new Request(`${ORIGIN}/api/auth/passkey/generate-authenticate-options`, {
+          headers: { Origin: ORIGIN },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = toRecord(await res.json());
+      const challenge = readStr(body, "challenge");
+      const challengeCookie = extractCookieHeader(res);
+      expect(challenge).not.toBe("");
+      expect(challengeCookie).toContain("passkey");
+      return { challenge, challengeCookie };
+    };
+
+    const passkeyOAuthQuery = await fetchSignedOAuthQuery("st-passkey-resume");
+
+    // 5a. Tampered oauth_query MUST be rejected (400) on POST /api/auth/passkey/verify-authentication
+    const tamperedChallenge = await requestAuthChallenge();
+    const tamperedAssertion = await buildSignedWebAuthnAssertion({
+      credentialId: ownerCredId,
+      challenge: tamperedChallenge.challenge,
+      origin: ORIGIN,
+      rpId: "board.example.test",
+      counter: 1,
+      privateKey: ownerKey.privateKey,
+    });
+    const tamperedPasskeyRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/verify-authentication`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+          Cookie: tamperedChallenge.challengeCookie,
+        },
+        body: JSON.stringify({
+          response: tamperedAssertion,
+          oauth_query: `${passkeyOAuthQuery}&scope=tampered`,
+        }),
+      }),
+    );
+    expect(tamperedPasskeyRes.status).toBe(400);
+
+    // 5b. Valid owner WebAuthn P-256 assertion + real signed oauth_query -> 200 { redirect: true, url: "/consent?..." }, sets owner session cookie, increments counter 0 -> 1
+    const ownerChallenge = await requestAuthChallenge();
+    const ownerAssertion = await buildSignedWebAuthnAssertion({
+      credentialId: ownerCredId,
+      challenge: ownerChallenge.challenge,
+      origin: ORIGIN,
+      rpId: "board.example.test",
+      counter: 1,
+      privateKey: ownerKey.privateKey,
+    });
+    const ownerPasskeyRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/verify-authentication`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+          Cookie: ownerChallenge.challengeCookie,
+        },
+        body: JSON.stringify({
+          response: ownerAssertion,
+          oauth_query: passkeyOAuthQuery,
+        }),
+      }),
+    );
+    expect(ownerPasskeyRes.status).toBe(200);
+    expect(ownerPasskeyRes.headers.get("Cache-Control")).toBe("no-store");
+    expect(ownerPasskeyRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    const ownerPasskeyJson = toRecord(await ownerPasskeyRes.json());
+    expect(ownerPasskeyJson["redirect"]).toBe(true);
+    expect(readStr(ownerPasskeyJson, "url")).toStartWith("/consent?");
+
+    const passkeySessionCookie = extractCookieHeader(ownerPasskeyRes)
+      .split("; ")
+      .filter((pair) => pair.includes("session_token="))
+      .join("; ");
+    expect(passkeySessionCookie).toContain("session_token=");
+
+    const wsWithPasskeySession = await workerFetch(
+      new Request(`${ORIGIN}/api/human/workspace`, {
+        headers: { Cookie: passkeySessionCookie },
+      }),
+    );
+    expect(wsWithPasskeySession.status).toBe(200);
+
+    const updatedOwnerPk = await sqliteDb.orm
+      .select({ counter: schema.passkey.counter })
+      .from(schema.passkey)
+      .where(eq(schema.passkey.id, "pk_owner_real_1"))
+      .get();
+    expect(updatedOwnerPk?.counter).toBe(1);
+
+    // 5c. Non-owner WebAuthn P-256 passkey MUST be rejected 403 NOT_AUTHORIZED via session.create.before with 0 new sessions
+    const intruderSessionsBefore = await sqliteDb.orm
+      .select({ id: schema.session.id })
+      .from(schema.session)
+      .where(eq(schema.session.userId, nonOwnerUserId))
+      .all();
+    const intruderChallenge = await requestAuthChallenge();
+    const intruderAssertion = await buildSignedWebAuthnAssertion({
+      credentialId: nonOwnerCredId,
+      challenge: intruderChallenge.challenge,
+      origin: ORIGIN,
+      rpId: "board.example.test",
+      counter: 1,
+      privateKey: nonOwnerKey.privateKey,
+    });
+    const intruderPasskeyRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/verify-authentication`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+          Cookie: intruderChallenge.challengeCookie,
+        },
+        body: JSON.stringify({
+          response: intruderAssertion,
+        }),
+      }),
+    );
+    expect(intruderPasskeyRes.status).toBe(403);
+    expect(extractCookieHeader(intruderPasskeyRes)).not.toContain("session_token=");
+    const intruderSessionsAfter = await sqliteDb.orm
+      .select({ id: schema.session.id })
+      .from(schema.session)
+      .where(eq(schema.session.userId, nonOwnerUserId))
+      .all();
+    expect(intruderSessionsAfter.length).toBe(intruderSessionsBefore.length);
+
+    // 6. Owner deletes their registered passkey via POST /api/auth/passkey/delete-passkey -> list returns []
+    const deleteRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/delete-passkey`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: ORIGIN,
+          Cookie: passkeySessionCookie,
+        },
+        body: JSON.stringify({ id: "pk_owner_real_1" }),
+      }),
+    );
+    expect(deleteRes.status).toBe(200);
+    expect(deleteRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(deleteRes.headers.get("Cache-Control")).toBe("no-store");
+
+    const listAfterDeleteRes = await workerFetch(
+      new Request(`${ORIGIN}/api/auth/passkey/list-user-passkeys`, {
+        headers: { Cookie: passkeySessionCookie },
+      }),
+    );
+    expect(listAfterDeleteRes.status).toBe(200);
+    expect(await listAfterDeleteRes.json()).toEqual([]);
   });
 
   test("supports resource-less opaque OAuth 2.1 flow + full MCP 2025-06-18 stateless handshake (initialize, initialized 202, ping, tools/list annotations, GET/DELETE 405) + trailing slash /api/mcp/ (Sec-M1, Sec-M2, Sec-m1)", async () => {

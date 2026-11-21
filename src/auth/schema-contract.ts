@@ -1,4 +1,5 @@
 import { mcp } from "@better-auth/mcp";
+import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { getAuthTables } from "better-auth/db";
 import { jwt } from "better-auth/plugins";
@@ -17,7 +18,7 @@ export interface ExpectedAuthTableContract {
 }
 
 /**
- * Computes the expected Better Auth + JWT + @better-auth/mcp table/column contract
+ * Computes the expected Better Auth + JWT + @better-auth/passkey + @better-auth/mcp table/column contract
  * dynamically (request/test-scoped, zero module-level singletons) so schema parity
  * guardrails stay locked to the installed Better Auth version.
  */
@@ -27,6 +28,7 @@ export function inspectBetterAuthSchemaContract(): ReadonlyMap<string, ExpectedA
     secret: "schema-probe-entropy-0123456789-abcdef",
     plugins: [
       jwt(),
+      passkey(),
       mcp({
         loginPage: "/sign-in",
         consentPage: "/consent",
