@@ -2,7 +2,13 @@ import { type ReactElement, useCallback, useEffect, useId, useState } from "reac
 
 import { BOT_SCOPES, type BotScope, budgetLimitSchema, DomainError } from "@/domain";
 
-import { signOutOwner } from "../api/auth-client";
+import {
+  deleteOwnerPasskey,
+  listOwnerPasskeys,
+  type OwnerPasskeyDto,
+  registerOwnerPasskey,
+  signOutOwner,
+} from "../api/auth-client";
 import { ClientAuthError, ClientTransportError } from "../api/decision-client";
 import {
   createHumanWorkerBotApi,
@@ -83,6 +89,14 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
   const [isSigningOut, setIsSigningOut] = useState<boolean>(false);
   const [copiedMcpUrl, setCopiedMcpUrl] = useState<boolean>(false);
 
+  // Passkey management state
+  const [passkeys, setPasskeys] = useState<readonly OwnerPasskeyDto[]>([]);
+  const [passkeysLoadError, setPasskeysLoadError] = useState<string | null>(null);
+  const [newPasskeyName, setNewPasskeyName] = useState<string>("");
+  const [isRegisteringPasskey, setIsRegisteringPasskey] = useState<boolean>(false);
+  const [deletingPasskeyId, setDeletingPasskeyId] = useState<string | null>(null);
+  const [pendingDeletePasskeyId, setPendingDeletePasskeyId] = useState<string | null>(null);
+
   const formIdPrefix = useId();
   const mcpEndpointUrl =
     typeof window !== "undefined" ? `${window.location.origin}/api/mcp` : "/api/mcp";
@@ -100,11 +114,31 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
   const loadAll = useCallback(async (): Promise<void> => {
     setIsLoading(true);
     setErrorBanner(null);
+    setPasskeysLoadError(null);
     setPendingRevokeBotId(null);
+    setPendingDeletePasskeyId(null);
     try {
-      const [ws, botList] = await Promise.all([fetchHumanWorkspace(), fetchHumanBots()]);
+      const [ws, botList, passkeyResult] = await Promise.all([
+        fetchHumanWorkspace(),
+        fetchHumanBots(),
+        listOwnerPasskeys(),
+      ]);
       setWorkspace(ws);
       setBots(botList);
+      if (passkeyResult.ok) {
+        setPasskeys(passkeyResult.passkeys);
+        setPasskeysLoadError(null);
+      } else if (passkeyResult.status === 401) {
+        onNavigate(buildSignInRedirectPath("/settings"), { replace: true });
+        return;
+      } else if (passkeyResult.status === 403) {
+        onNavigate("/sign-in?error=NOT_AUTHORIZED", { replace: true });
+        return;
+      } else {
+        setPasskeys([]);
+        setPasskeysLoadError(passkeyResult.message);
+        setErrorBanner(passkeyResult.message);
+      }
       setGoalInput(ws.goal);
       setScopeInput(ws.allowed_scope);
       setMaxCardsInput(String(ws.budget_limit.max_cards_per_day));
@@ -119,7 +153,7 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
     } finally {
       setIsLoading(false);
     }
-  }, [handleAuthError]);
+  }, [handleAuthError, onNavigate]);
 
   useEffect(() => {
     void loadAll();
@@ -421,6 +455,61 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
       setStatusMessage(`コピーに失敗しました。手動でコピーしてください: ${mcpEndpointUrl}`);
     }
   }, [mcpEndpointUrl]);
+
+  const handleRegisterPasskey = useCallback(async (): Promise<void> => {
+    if (isRegisteringPasskey) {
+      return;
+    }
+    setIsRegisteringPasskey(true);
+    setErrorBanner(null);
+    const trimmedName = newPasskeyName.trim();
+    const res = await registerOwnerPasskey(trimmedName !== "" ? trimmedName : undefined);
+    setIsRegisteringPasskey(false);
+    if (!res.ok) {
+      if (res.status === 401) {
+        onNavigate(buildSignInRedirectPath("/settings"), { replace: true });
+        return;
+      }
+      setErrorBanner(res.message);
+      return;
+    }
+    setNewPasskeyName("");
+    const refreshed = await listOwnerPasskeys();
+    if (refreshed.ok) {
+      setPasskeys(refreshed.passkeys);
+      setPasskeysLoadError(null);
+    } else if (res.passkey !== undefined) {
+      const createdPasskey = res.passkey;
+      setPasskeys((prev) => [...prev, createdPasskey]);
+    }
+    setStatusMessage(
+      `パスキー${trimmedName !== "" ? `「${trimmedName}」` : ""}を登録しました。次回から 1 タップでサインインできます。`,
+    );
+  }, [isRegisteringPasskey, newPasskeyName, onNavigate]);
+
+  const handleConfirmDeletePasskey = useCallback(
+    async (pk: OwnerPasskeyDto): Promise<void> => {
+      if (deletingPasskeyId !== null) {
+        return;
+      }
+      setDeletingPasskeyId(pk.id);
+      setErrorBanner(null);
+      const res = await deleteOwnerPasskey(pk.id);
+      setDeletingPasskeyId(null);
+      if (!res.ok) {
+        if (res.status === 401) {
+          onNavigate(buildSignInRedirectPath("/settings"), { replace: true });
+          return;
+        }
+        setErrorBanner(res.message);
+        return;
+      }
+      setPendingDeletePasskeyId(null);
+      setPasskeys((prev) => prev.filter((item) => item.id !== pk.id));
+      setStatusMessage(`パスキー「${pk.name ?? "登録済みパスキー"}」を削除しました。`);
+    },
+    [deletingPasskeyId, onNavigate],
+  );
 
   const handleSelectNav = useCallback(
     (tab: NavTabId): void => {
@@ -1177,6 +1266,212 @@ export function SettingsPage(props: SettingsPageProps): ReactElement {
                   ))}
                 </div>
               </div>
+            </section>
+
+            {/* Owner Passkey Management (Face ID / Touch ID / 1Password) */}
+            <section
+              data-testid="settings-passkeys-section"
+              className="space-y-3 rounded-2xl border p-4 text-xs bb-card-shadow lg:col-span-12"
+              style={{
+                borderColor: "var(--border-default)",
+                backgroundColor: "var(--surface-card)",
+              }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-bold">パスキー管理（Face ID / Touch ID）</h2>
+                  <p style={{ color: "var(--ink-muted)" }}>
+                    登録済みパスキーを使うと、スマホ・PC からパスワード入力なしで 1
+                    タップサインインできます。
+                  </p>
+                </div>
+                <span
+                  data-testid="passkey-count-badge"
+                  className="shrink-0 rounded-full border px-2.5 py-0.5 font-semibold"
+                  style={{
+                    borderColor: "var(--border-default)",
+                    backgroundColor: "var(--surface-subtle)",
+                    color: "var(--ink-primary)",
+                  }}
+                >
+                  {passkeysLoadError !== null ? "取得失敗" : `${passkeys.length} 件登録済`}
+                </span>
+              </div>
+
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleRegisterPasskey();
+                }}
+                className="flex flex-col gap-2 sm:flex-row sm:items-end"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <label
+                    htmlFor={`${formIdPrefix}-passkey-name`}
+                    className="block font-semibold"
+                    style={{ color: "var(--ink-muted)" }}
+                  >
+                    端末名（任意）
+                  </label>
+                  <input
+                    id={`${formIdPrefix}-passkey-name`}
+                    data-testid="input-passkey-name"
+                    type="text"
+                    maxLength={80}
+                    value={newPasskeyName}
+                    onChange={(e) => setNewPasskeyName(e.target.value)}
+                    placeholder="例: iPhone (Face ID) / MacBook (Touch ID)"
+                    className="min-h-[44px] w-full rounded-xl border px-3 text-xs"
+                    style={{
+                      borderColor: "var(--border-default)",
+                      backgroundColor: "var(--surface-subtle)",
+                      color: "var(--ink-primary)",
+                    }}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  data-testid="btn-register-passkey"
+                  disabled={isRegisteringPasskey}
+                  className="inline-flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-center rounded-xl px-4 font-bold disabled:cursor-not-allowed disabled:opacity-45"
+                  style={{
+                    backgroundColor: "var(--accent-primary)",
+                    color: "var(--accent-primary-ink)",
+                  }}
+                >
+                  {isRegisteringPasskey ? "登録中…" : "+ パスキーを登録"}
+                </button>
+              </form>
+
+              {passkeysLoadError !== null ? (
+                <div
+                  role="alert"
+                  data-testid="settings-passkeys-error"
+                  className="rounded-xl border p-3 text-xs"
+                  style={{
+                    borderColor: "var(--tone-warn-border)",
+                    backgroundColor: "var(--tone-warn-bg)",
+                    color: "var(--ink-primary)",
+                  }}
+                >
+                  <div className="font-bold" style={{ color: "var(--tone-warn)" }}>
+                    パスキー一覧の取得に失敗しました
+                  </div>
+                  <div style={{ color: "var(--ink-muted)" }}>{passkeysLoadError}</div>
+                </div>
+              ) : passkeys.length === 0 ? (
+                <div
+                  data-testid="settings-passkeys-empty"
+                  className="rounded-xl border p-4 text-center"
+                  style={{
+                    borderColor: "var(--border-subtle)",
+                    backgroundColor: "var(--surface-subtle)",
+                    color: "var(--ink-muted)",
+                  }}
+                >
+                  まだパスキーが登録されていません。上の「+
+                  パスキーを登録」から現在の端末を追加できます。
+                </div>
+              ) : (
+                <div className="space-y-2" data-testid="settings-passkeys-list">
+                  {passkeys.map((pk) => {
+                    const isConfirmingDelete = pendingDeletePasskeyId === pk.id;
+                    const isDeleting = deletingPasskeyId === pk.id;
+                    const label = pk.name?.trim() || "登録済みパスキー";
+                    const deviceLabel =
+                      pk.deviceType === "multiDevice" ? "同期パスキー" : "端末固有パスキー";
+                    const createdDate = pk.createdAt !== null ? pk.createdAt.slice(0, 10) : null;
+                    return (
+                      <article
+                        key={pk.id}
+                        data-testid={`settings-passkey-${pk.id}`}
+                        className="space-y-2 rounded-xl border p-3"
+                        style={{
+                          borderColor: "var(--border-subtle)",
+                          backgroundColor: "var(--surface-subtle)",
+                        }}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="break-words text-sm font-bold">{label}</div>
+                            <div style={{ color: "var(--ink-muted)" }}>
+                              {deviceLabel}
+                              {createdDate !== null ? ` ・ 登録日 ${createdDate}` : ""}
+                            </div>
+                          </div>
+                          {!isConfirmingDelete ? (
+                            <button
+                              type="button"
+                              data-testid={`btn-request-delete-passkey-${pk.id}`}
+                              disabled={deletingPasskeyId !== null}
+                              onClick={() => setPendingDeletePasskeyId(pk.id)}
+                              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 cursor-pointer items-center justify-center rounded-xl border px-3 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                              style={{
+                                borderColor: "var(--tone-decline-border)",
+                                backgroundColor: "var(--surface-card)",
+                                color: "var(--tone-decline)",
+                              }}
+                            >
+                              削除
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {isConfirmingDelete ? (
+                          <div
+                            role="alert"
+                            data-testid={`passkey-delete-confirm-${pk.id}`}
+                            className="space-y-2 rounded-xl border p-2.5"
+                            style={{
+                              borderColor: "var(--tone-decline-border)",
+                              backgroundColor: "var(--tone-decline-bg)",
+                            }}
+                          >
+                            <div className="font-bold" style={{ color: "var(--tone-decline)" }}>
+                              このパスキーを削除しますか？（取り消し不可）
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                data-testid={`btn-cancel-delete-passkey-${pk.id}`}
+                                disabled={isDeleting}
+                                onClick={() => setPendingDeletePasskeyId(null)}
+                                className="inline-flex min-h-[44px] min-w-[44px] flex-1 cursor-pointer items-center justify-center rounded-xl border px-3 font-semibold"
+                                style={{
+                                  borderColor: "var(--border-default)",
+                                  backgroundColor: "var(--surface-card)",
+                                  color: "var(--ink-primary)",
+                                }}
+                              >
+                                キャンセル
+                              </button>
+                              <button
+                                type="button"
+                                data-testid={`btn-confirm-delete-passkey-${pk.id}`}
+                                disabled={isDeleting}
+                                onClick={() => {
+                                  void handleConfirmDeletePasskey(pk);
+                                }}
+                                className="inline-flex min-h-[44px] min-w-[44px] flex-1 cursor-pointer items-center justify-center rounded-xl px-3 font-bold"
+                                style={{
+                                  backgroundColor: "var(--tone-decline)",
+                                  color: "var(--accent-primary-ink)",
+                                }}
+                              >
+                                {isDeleting ? "削除中…" : "削除を実行"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+
+              <p style={{ color: "var(--ink-muted)" }}>
+                すべてのパスキーを削除しても、登録済みのメールアドレス＋パスワードで引き続きサインインできます。
+              </p>
             </section>
           </div>
         ) : null}

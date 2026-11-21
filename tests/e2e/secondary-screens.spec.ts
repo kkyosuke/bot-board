@@ -84,10 +84,17 @@ test.describe("S6 Secondary Screens (/board, /history, /settings) & Live /api/hu
         body: JSON.stringify({ code: "NOT_AUTHORIZED", message: "Sign-in required" }),
       });
     });
+    await page.route("**/api/auth/owner-status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ initialized: true }),
+      });
+    });
 
     await page.goto("/");
     await expect(page).toHaveURL(/\/sign-in/);
-    await expect(page.getByTestId("github-sign-in-btn")).toBeVisible();
+    await expect(page.getByTestId("passkey-sign-in-btn")).toBeVisible();
 
     // 2. Initial 500 on live / shows explicit load-error card (NEVER false "All cleared") and recovers on retry
     let shouldFailCards = true;
@@ -690,10 +697,85 @@ test.describe("S6 Secondary Screens (/board, /history, /settings) & Live /api/hu
       });
     });
 
+    let passkeys = [
+      {
+        id: "pk_iphone_1",
+        name: "iPhone (Face ID)",
+        deviceType: "multiDevice",
+        backedUp: true,
+        createdAt: "2026-11-20T00:00:00.000Z",
+      },
+    ];
+    let passkeyDeleteCalls = 0;
+    let failPasskeysOnce = true;
+
+    await page.route("**/api/auth/passkey/list-user-passkeys", async (route) => {
+      if (failPasskeysOnce) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "Temporary passkey store error" }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(passkeys),
+      });
+    });
+
+    await page.route("**/api/auth/passkey/delete-passkey", async (route) => {
+      passkeyDeleteCalls += 1;
+      const raw: unknown = route.request().postDataJSON();
+      const id: unknown =
+        raw !== null && typeof raw === "object" && !Array.isArray(raw)
+          ? Reflect.get(raw, "id")
+          : null;
+      if (typeof id === "string") {
+        passkeys = passkeys.filter((item) => item.id !== id);
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: true }),
+      });
+    });
+
     await page.goto("/settings");
-    await expect(page.getByTestId("settings-onboarding")).toBeVisible();
+    await expect(page.getByTestId("settings-passkeys-section")).toBeVisible();
+    await expect(page.getByTestId("settings-error-banner")).toBeVisible();
+    await expect(page.getByTestId("settings-passkeys-error")).toBeVisible();
+    await expect(page.getByTestId("passkey-count-badge")).toContainText("取得失敗");
+    await expect(page.getByTestId("settings-passkeys-empty")).toHaveCount(0);
     await assertNoHorizontalOverflow(page);
     await assertAllVisibleButtonsAtLeast44px(page);
+
+    // Reloading after list-user-passkeys recovers clears error and renders registered passkey
+    failPasskeysOnce = false;
+    await page.getByTestId("btn-settings-error-reload").click();
+    await expect(page.getByTestId("settings-passkeys-error")).toHaveCount(0);
+    await expect(page.getByTestId("settings-onboarding")).toBeVisible();
+    await expect(page.getByTestId("passkey-count-badge")).toContainText("1 件登録済");
+    await expect(page.getByTestId("settings-passkey-pk_iphone_1")).toContainText(
+      "iPhone (Face ID)",
+    );
+    await assertNoHorizontalOverflow(page);
+    await assertAllVisibleButtonsAtLeast44px(page);
+
+    // 2-step passkey delete: Cancel must not delete; Confirm deletes and updates badge to 0
+    await page.getByTestId("btn-request-delete-passkey-pk_iphone_1").click();
+    await expect(page.getByTestId("passkey-delete-confirm-pk_iphone_1")).toBeVisible();
+    await assertAllVisibleButtonsAtLeast44px(page);
+    await page.getByTestId("btn-cancel-delete-passkey-pk_iphone_1").click();
+    await expect(page.getByTestId("passkey-delete-confirm-pk_iphone_1")).toHaveCount(0);
+    expect(passkeyDeleteCalls).toBe(0);
+
+    await page.getByTestId("btn-request-delete-passkey-pk_iphone_1").click();
+    await page.getByTestId("btn-confirm-delete-passkey-pk_iphone_1").click();
+    await expect(page.getByTestId("settings-passkeys-empty")).toBeVisible();
+    await expect(page.getByTestId("passkey-count-badge")).toContainText("0 件登録済");
+    expect(passkeyDeleteCalls).toBe(1);
 
     // Never claim unverified external Bot channels as 対応済
     await expect(page.getByTestId("settings-page")).not.toContainText("対応済");
@@ -780,6 +862,13 @@ test.describe("S6 Secondary Screens (/board, /history, /settings) & Live /api/hu
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({ success: true }),
+      });
+    });
+    await page.route("**/api/auth/owner-status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ initialized: true }),
       });
     });
     await page.unroute("**/api/human/workspace");

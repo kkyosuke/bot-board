@@ -22,6 +22,8 @@ const STRIP_WHEN_EMPTY_ENV_KEYS = [
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
 ] as const;
 
 export function isSelfHostedPulumiBackend(rawUrl: string): boolean {
@@ -46,6 +48,17 @@ export function buildPulumiCommandEnv(
       continue;
     }
     sanitized[key] = value;
+  }
+
+  // Mirror deploy.yml R2_* -> AWS_* fallback so local `bun run deploy` works identically with Cloudflare R2 credentials
+  if (sanitized["AWS_ACCESS_KEY_ID"] === undefined && sanitized["R2_ACCESS_KEY_ID"] !== undefined) {
+    sanitized["AWS_ACCESS_KEY_ID"] = sanitized["R2_ACCESS_KEY_ID"];
+  }
+  if (
+    sanitized["AWS_SECRET_ACCESS_KEY"] === undefined &&
+    sanitized["R2_SECRET_ACCESS_KEY"] !== undefined
+  ) {
+    sanitized["AWS_SECRET_ACCESS_KEY"] = sanitized["R2_SECRET_ACCESS_KEY"];
   }
 
   const backendUrl = sanitized["PULUMI_BACKEND_URL"]?.trim() ?? "";

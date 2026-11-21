@@ -37,14 +37,15 @@ function resolvePort(): number {
   return parsed;
 }
 
+const ENABLE_TEST_CONTROLS = process.env["FULLSTACK_TEST_CONTROLS"] === "1";
 const PORT = resolvePort();
 const HOST = "127.0.0.1";
-const BASE_URL = `http://${HOST}:${PORT}`;
+const PUBLIC_HOST = ENABLE_TEST_CONTROLS ? HOST : "localhost";
+const BASE_URL = `http://${PUBLIC_HOST}:${PORT}`;
 const DB_PATH = process.env["FULLSTACK_DB_PATH"]?.trim() || ":memory:";
 const AUTH_SECRET =
   process.env["BETTER_AUTH_SECRET"] ?? "local-fullstack-secret-key-0123456789abcdef";
-const OWNER_GITHUB_ID = process.env["OWNER_GITHUB_ID"] ?? "github-owner-fullstack-1";
-const ENABLE_TEST_CONTROLS = process.env["FULLSTACK_TEST_CONTROLS"] === "1";
+const OWNER_EMAIL = (process.env["OWNER_EMAIL"] ?? "owner@fullstack.local").trim().toLowerCase();
 const FORCE_LOCAL_ADAPTER = process.env["FULLSTACK_USE_LOCAL_ADAPTER"] === "1";
 const CLIENT_DIST_DIR = join(import.meta.dir, "../../../dist/client");
 const RESOLVED_CLIENT_DIST_DIR = resolve(CLIENT_DIST_DIR);
@@ -288,6 +289,20 @@ async function createFreshState(): Promise<FullStackState> {
   await sqliteDb.applyMigrations();
   const d1 = createSqliteBackedD1(sqliteDb);
 
+  if (!ENABLE_TEST_CONTROLS) {
+    return {
+      sqliteDb,
+      d1,
+      finalizeQueueItems: [],
+      botWorkQueueItems: [],
+      dlqQueueItems: [],
+      ownerUserId: "",
+      workspaceId: "",
+      ownerCookieName: "better-auth.session_token",
+      ownerCookieValue: "",
+    };
+  }
+
   const nowMs = Date.now();
   const ownerUserId = "user-fullstack-owner";
   const sessionId = `session-fs-${crypto.randomUUID()}`;
@@ -298,7 +313,7 @@ async function createFreshState(): Promise<FullStackState> {
     .values({
       id: ownerUserId,
       name: "Full-Stack Owner",
-      email: "owner@fullstack.local",
+      email: OWNER_EMAIL,
       emailVerified: true,
       createdAt: new Date(nowMs),
       updatedAt: new Date(nowMs),
@@ -308,9 +323,9 @@ async function createFreshState(): Promise<FullStackState> {
   await sqliteDb.orm
     .insert(schema.account)
     .values({
-      id: "acc-fullstack-gh",
-      accountId: OWNER_GITHUB_ID,
-      providerId: "github",
+      id: "acc-fullstack-cred",
+      accountId: ownerUserId,
+      providerId: "credential",
       userId: ownerUserId,
       createdAt: new Date(nowMs),
       updatedAt: new Date(nowMs),
@@ -400,8 +415,6 @@ function buildWorkerEnv(state: FullStackState): WorkerRuntimeEnv {
   const metaKey = process.env["META_MODEL_API_KEY"]?.trim() ?? "";
   const metaModel = process.env["META_MODEL"]?.trim();
   const metaApiUrl = process.env["META_API_URL"]?.trim();
-  const githubClientId = process.env["GITHUB_CLIENT_ID"]?.trim();
-  const githubClientSecret = process.env["GITHUB_CLIENT_SECRET"]?.trim();
   const hasRealProviderKey = xaiKey !== "" || geminiKey !== "" || metaKey !== "";
   const useProductionAdapterPath =
     !FORCE_LOCAL_ADAPTER &&
@@ -439,13 +452,7 @@ function buildWorkerEnv(state: FullStackState): WorkerRuntimeEnv {
     BETTER_AUTH_SECRET: AUTH_SECRET,
     BETTER_AUTH_URL: BASE_URL,
     TRUSTED_ORIGINS: BASE_URL,
-    OWNER_GITHUB_ID,
-    ...(githubClientId !== undefined && githubClientId !== ""
-      ? { GITHUB_CLIENT_ID: githubClientId }
-      : {}),
-    ...(githubClientSecret !== undefined && githubClientSecret !== ""
-      ? { GITHUB_CLIENT_SECRET: githubClientSecret }
-      : {}),
+    OWNER_EMAIL,
     // When any provider API key or WORKER_LLM_PROVIDER is supplied (and not forced local),
     // let src/worker/index.ts resolve the production adapter identically to Cloudflare Workers.
     ...(useProductionAdapterPath
@@ -691,6 +698,7 @@ const server = Bun.serve({
 });
 
 logger.info("Local full-stack bot-board server listening", {
-  url: `http://${server.hostname}:${server.port}`,
+  url: BASE_URL,
+  listen: `http://${server.hostname}:${server.port}`,
   testControls: ENABLE_TEST_CONTROLS,
 });

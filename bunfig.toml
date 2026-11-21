@@ -352,7 +352,15 @@ rules = {
         name = "@better-auth/mcp",
         message = "Better Auth MCP setup is restricted to src/auth/.",
       },
+      {
+        name = "@better-auth/passkey",
+        message = "Better Auth Passkey setup is restricted to src/auth/.",
+      },
     ],
+    patterns = [{
+      group = ["better-auth/*", "@better-auth/*"],
+      message = "Better Auth modules and subpaths are restricted to src/auth/.",
+    }],
   }],
   "@typescript-eslint/ban-ts-comment" = ["error", {
     "ts-expect-error" = "allow-with-description",

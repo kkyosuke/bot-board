@@ -7,7 +7,7 @@ import { schema } from "@/db";
 import { createSqliteDatabase } from "@/db/sqlite";
 
 describe("Drizzle schema <-> SQL migration <-> Better Auth parity guardrails (M5, M7)", () => {
-  test("every table, column, nullability, FK, named CHECK constraint, and index in src/db/schema.ts matches 0001_initial.sql", async () => {
+  test("every table, column, nullability, FK, named CHECK constraint, and index in src/db/schema.ts matches src/db/migrations/*.sql", async () => {
     const db = createSqliteDatabase(":memory:");
     try {
       await db.applyMigrations();

@@ -63,6 +63,29 @@ export const verification = sqliteTable("verification", {
   updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull(),
 });
 
+export const passkey = sqliteTable(
+  "passkey",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    publicKey: text("publicKey").notNull(),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    credentialID: text("credentialID").notNull(),
+    counter: integer("counter").notNull(),
+    deviceType: text("deviceType").notNull(),
+    backedUp: integer("backedUp", { mode: "boolean" }).notNull(),
+    transports: text("transports"),
+    createdAt: integer("createdAt", { mode: "timestamp_ms" }),
+    aaguid: text("aaguid"),
+  },
+  (table) => [
+    index("idx_passkey_user_id").on(table.userId),
+    uniqueIndex("idx_passkey_credential_id").on(table.credentialID),
+  ],
+);
+
 export const jwks = sqliteTable("jwks", {
   id: text("id").primaryKey(),
   publicKey: text("publicKey").notNull(),
@@ -507,6 +530,7 @@ export const schema = {
   session,
   account,
   verification,
+  passkey,
   jwks,
   oauthClient,
   oauthResource,

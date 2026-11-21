@@ -93,16 +93,12 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
     expect(infraIndex).toContain("pulumi.secret(");
     const syncedWorkerSecrets = [
       "BETTER_AUTH_SECRET",
-      "GITHUB_CLIENT_ID",
-      "GITHUB_CLIENT_SECRET",
       "GEMINI_API_KEY",
       "XAI_API_KEY",
       "META_MODEL_API_KEY",
     ];
     const expectedSecretExpressions: Readonly<Record<string, string>> = {
       BETTER_AUTH_SECRET: "BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}",
-      GITHUB_CLIENT_ID: "GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}",
-      GITHUB_CLIENT_SECRET: "GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}",
       GEMINI_API_KEY:
         "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_GEMINI_API_KEY }}",
       XAI_API_KEY: "XAI_API_KEY: ${{ secrets.XAI_API_KEY }}",
@@ -118,11 +114,45 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
       expect(deployYml).not.toContain(`vars.${secretName}`);
       expect(runbookMd).toContain(secretName);
     }
+    // Single-owner Passkey + OWNER_EMAIL auth (GitHub OAuth completely removed across IaC, workflow, docs, and runtime src/)
+    expect(infraIndex).toContain('"OWNER_EMAIL"');
+    expect(deployYml).toContain("OWNER_EMAIL: ${{ vars.OWNER_EMAIL || secrets.OWNER_EMAIL }}");
+    expect(runbookMd).toContain("OWNER_EMAIL");
+    const runtimeAuthFiles = [
+      join(REPO_ROOT, "infra", "Pulumi.staging.yaml"),
+      join(REPO_ROOT, "infra", "Pulumi.prod.yaml"),
+      join(REPO_ROOT, "src", "auth", "better-auth.ts"),
+      join(REPO_ROOT, "src", "auth", "owner.ts"),
+      join(REPO_ROOT, "src", "server", "http-runtime.ts"),
+      join(REPO_ROOT, "src", "worker", "index.ts"),
+      join(REPO_ROOT, "src", "client", "api", "auth-client.ts"),
+      join(REPO_ROOT, "src", "client", "pages", "SignInPage.tsx"),
+    ];
+    for (const removedKey of ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "OWNER_GITHUB_ID"]) {
+      expect(infraIndex).not.toContain(removedKey);
+      expect(deployYml).not.toContain(removedKey);
+      expect(runbookMd).not.toContain(removedKey);
+      for (const filePath of runtimeAuthFiles) {
+        expect(readFileSync(filePath, "utf8")).not.toContain(removedKey);
+      }
+    }
+    for (const removedClientCode of [
+      "startGithubOAuthSignIn",
+      "github-sign-in-btn",
+      "/api/auth/callback/",
+    ]) {
+      for (const filePath of runtimeAuthFiles) {
+        expect(readFileSync(filePath, "utf8")).not.toContain(removedClientCode);
+      }
+    }
+
     expect(deployYml).toContain(
       "environment: ${{ inputs.stack == 'prod' && 'prd-deploy' || inputs.stack }}",
     );
     expect(runbookMd).toContain("prd-deploy");
     expect(runbookMd).toContain("GOOGLE_GEMINI_API_KEY");
+    expect(runbookMd).toContain("R2_ACCESS_KEY_ID");
+    expect(runbookMd).toContain("R2_SECRET_ACCESS_KEY");
     expect(deployYml).not.toContain("vars.GOOGLE_GEMINI_API_KEY");
     expect(deployYml).not.toContain("vars.CLOUDFLARE_API_TOKEN");
     expect(deployYml).not.toContain("vars.PULUMI_ACCESS_TOKEN");
@@ -130,9 +160,15 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
     expect(deployYml).not.toContain("vars.PULUMI_CONFIG_PASSPHRASE");
     expect(deployYml).not.toContain("vars.AWS_ACCESS_KEY_ID");
     expect(deployYml).not.toContain("vars.AWS_SECRET_ACCESS_KEY");
+    expect(deployYml).not.toContain("vars.R2_ACCESS_KEY_ID");
+    expect(deployYml).not.toContain("vars.R2_SECRET_ACCESS_KEY");
     expect(deployYml).not.toContain("vars.SMOKE_BOT_TOKEN");
-    expect(deployYml).toContain("AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}");
-    expect(deployYml).toContain("AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}");
+    expect(deployYml).toContain(
+      "AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || secrets.R2_ACCESS_KEY_ID }}",
+    );
+    expect(deployYml).toContain(
+      "AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || secrets.R2_SECRET_ACCESS_KEY }}",
+    );
     expect(deployTs).toContain("buildPulumiCommandEnv");
     expect(deployTs).toContain("runPulumiLogin");
     expect(deployTs).not.toContain('["login", pulumiBackendUrl');
@@ -143,8 +179,6 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
     const namespaceIds = new Set<string>();
     const secretKeys = [
       "betterAuthSecret",
-      "githubClientId",
-      "githubClientSecret",
       "xaiApiKey",
       "geminiApiKey",
       "metaModelApiKey",
@@ -219,7 +253,8 @@ describe("Pulumi Cloudflare infrastructure & Worker bundle guardrails (S1, Deplo
     expect(code).not.toContain("AsyncLocalStoragePolyfill");
     expect(code).not.toMatch(/\brequire\s*\(\s*["']/);
     expect(code).toMatch(/export\s*\{[^}]*\bas\s+default\b|export\s+default\b/);
-    expect(rawBytes.byteLength).toBeLessThan(2_000_000);
-    expect(gzipBytes.byteLength).toBeLessThan(500_000);
+    // Includes @better-auth/passkey + @simplewebauthn/server (~80 kB gzip); stays <22% of Cloudflare Workers 3 MB Free gzip limit
+    expect(rawBytes.byteLength).toBeLessThan(2_500_000);
+    expect(gzipBytes.byteLength).toBeLessThan(650_000);
   });
 });

@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 const ORIGIN = "https://board.example.test";
-const OWNER_GITHUB_ID = "github-owner-s4-77";
+const OWNER_EMAIL = "owner@example.test";
 const AUTH_SECRET = "super-secret-s4-oauth-better-auth-key-0123456789";
 
 function normalizeParam(v: unknown): string | number | null | Uint8Array {
@@ -199,17 +199,17 @@ describe("S4 OAuth 2.1 MCP Discovery (RFC 9728/8414), DCR, Consent bot_connectio
     ]);
     await sqliteDb.orm.insert(schema.account).values([
       {
-        id: "acc-s4-owner-gh",
-        accountId: OWNER_GITHUB_ID,
-        providerId: "github",
+        id: "acc-s4-owner-cred",
+        accountId: ownerUserId,
+        providerId: "credential",
         userId: ownerUserId,
         createdAt: new Date(nowMs),
         updatedAt: new Date(nowMs),
       },
       {
-        id: "acc-s4-intruder-gh",
-        accountId: "github-intruder-999",
-        providerId: "github",
+        id: "acc-s4-intruder-cred",
+        accountId: intruderUserId,
+        providerId: "credential",
         userId: intruderUserId,
         createdAt: new Date(nowMs),
         updatedAt: new Date(nowMs),
@@ -245,7 +245,7 @@ describe("S4 OAuth 2.1 MCP Discovery (RFC 9728/8414), DCR, Consent bot_connectio
       BOT_WORK_DLQ: { send: () => Promise.resolve() },
       BETTER_AUTH_SECRET: AUTH_SECRET,
       BETTER_AUTH_URL: ORIGIN,
-      OWNER_GITHUB_ID,
+      OWNER_EMAIL,
     };
     const execCtx = { waitUntil: () => {} };
 

@@ -1,5 +1,6 @@
 import { mcp } from "@better-auth/mcp";
 import { getOAuthProviderState } from "@better-auth/oauth-provider";
+import { passkey } from "@better-auth/passkey";
 import { betterAuth, type BetterAuthPlugin } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
@@ -27,9 +28,7 @@ export interface BetterAuthConfig {
   readonly baseUrl: string;
   readonly secret: string;
   readonly trustedOrigins?: readonly string[] | string;
-  readonly githubClientId?: string;
-  readonly githubClientSecret?: string;
-  readonly ownerGithubId?: string;
+  readonly ownerEmail?: string;
   readonly enableMcpOAuth?: boolean;
   readonly waitUntil?: (promise: Promise<unknown>) => void;
   readonly now?: () => number;
@@ -51,6 +50,17 @@ export interface BetterAuthSessionLookupResult {
 export interface BetterAuthRuntime {
   readonly handler: (request: Request) => Promise<Response>;
   readonly getSession: (headers: Headers) => Promise<BetterAuthSessionLookupResult | null>;
+}
+
+const BASIC_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function normalizeOwnerEmail(raw?: string): string {
+  return raw?.trim().toLowerCase() ?? "";
+}
+
+export function isValidOwnerEmail(raw?: string): boolean {
+  const normalized = normalizeOwnerEmail(raw);
+  return normalized !== "" && BASIC_EMAIL_PATTERN.test(normalized);
 }
 
 function normalizeOrigin(raw: string): string | null {
@@ -143,21 +153,22 @@ export async function ensureOwnerWorkspace(
   throw new DomainError("NOT_AUTHORIZED", "Failed to initialize owner workspace.", false);
 }
 
-export function assertAllowedOwnerGithubProfile(params: {
-  readonly configuredOwnerGithubId?: string | undefined;
-  readonly githubAccountId: string;
+export function assertAllowedOwnerEmail(params: {
+  readonly configuredOwnerEmail?: string | undefined;
+  readonly candidateEmail: string;
 }): void {
-  const allowed = params.configuredOwnerGithubId?.trim() ?? "";
-  if (allowed === "") {
+  const allowed = normalizeOwnerEmail(params.configuredOwnerEmail);
+  if (!isValidOwnerEmail(allowed)) {
     throw new APIError("FORBIDDEN", {
       code: "NOT_AUTHORIZED",
-      message: "NOT_AUTHORIZED: OWNER_GITHUB_ID is not configured.",
+      message: "NOT_AUTHORIZED: OWNER_EMAIL is not configured.",
     });
   }
-  if (params.githubAccountId.trim() !== allowed) {
+  const candidate = normalizeOwnerEmail(params.candidateEmail);
+  if (candidate === "" || candidate !== allowed) {
     throw new APIError("FORBIDDEN", {
       code: "NOT_AUTHORIZED",
-      message: "NOT_AUTHORIZED: Only the configured single owner GitHub account is allowed.",
+      message: "NOT_AUTHORIZED: Only the configured single owner email is allowed.",
     });
   }
 }
@@ -312,9 +323,91 @@ export async function upsertOAuthBotConnection(
   return { botId, created: true };
 }
 
+const PASSKEY_AUTHENTICATED_PATHS = new Set<string>([
+  "/passkey/generate-register-options",
+  "/passkey/verify-registration",
+  "/passkey/list-user-passkeys",
+  "/passkey/delete-passkey",
+  "/passkey/update-passkey",
+]);
+
+function createOwnerAuthBoundaryPlugin(
+  db: AppDatabase,
+  configuredOwnerEmail: string,
+): BetterAuthPlugin {
+  return {
+    id: "bot-board-owner-auth-boundary",
+    hooks: {
+      before: [
+        {
+          matcher: (context) => context.path === "/sign-up/email",
+          handler: createAuthMiddleware(async (ctx) => {
+            if (!isValidOwnerEmail(configuredOwnerEmail)) {
+              throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
+                message: "NOT_AUTHORIZED: OWNER_EMAIL is not configured.",
+              });
+            }
+            // Check single-owner lock BEFORE comparing email to prevent post-bootstrap OWNER_EMAIL enumeration (M1)
+            const existingUser = await db.orm
+              .select({ id: schema.user.id })
+              .from(schema.user)
+              .limit(1)
+              .get();
+            if (existingUser !== undefined) {
+              throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
+                message: "NOT_AUTHORIZED: Single-owner workspace forbids additional signups.",
+              });
+            }
+            const candidateEmail = readStringField(ctx.body, "email") ?? "";
+            assertAllowedOwnerEmail({
+              configuredOwnerEmail,
+              candidateEmail,
+            });
+          }),
+        },
+        {
+          matcher: (context) =>
+            context.path !== undefined && PASSKEY_AUTHENTICATED_PATHS.has(context.path),
+          handler: createAuthMiddleware(async (ctx) => {
+            const session = await getSessionFromCtx(ctx);
+            if (session === null) {
+              throw new APIError("UNAUTHORIZED", {
+                message: "NOT_AUTHORIZED: Owner sign-in required for passkey management.",
+              });
+            }
+            if (!isValidOwnerEmail(configuredOwnerEmail)) {
+              throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
+                message: "NOT_AUTHORIZED: OWNER_EMAIL must be configured.",
+              });
+            }
+            const userRow = await db.orm
+              .select({ email: schema.user.email })
+              .from(schema.user)
+              .where(eq(schema.user.id, session.user.id))
+              .get();
+            if (
+              userRow === undefined ||
+              normalizeOwnerEmail(userRow.email) !== configuredOwnerEmail ||
+              normalizeOwnerEmail(session.user.email) !== configuredOwnerEmail
+            ) {
+              throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
+                message: "NOT_AUTHORIZED: Only the configured single owner may manage passkeys.",
+              });
+            }
+          }),
+        },
+      ],
+    },
+  };
+}
+
 function createBotConnectionConsentPlugin(
   db: AppDatabase,
-  configuredOwnerGithubId: string,
+  configuredOwnerEmail: string,
   nowFn: () => number,
 ): BetterAuthPlugin {
   return {
@@ -330,22 +423,21 @@ function createBotConnectionConsentPlugin(
                 message: "NOT_AUTHORIZED: Owner sign-in required for OAuth consent.",
               });
             }
-            if (configuredOwnerGithubId === "") {
+            if (!isValidOwnerEmail(configuredOwnerEmail)) {
               throw new APIError("FORBIDDEN", {
-                message: "NOT_AUTHORIZED: OWNER_GITHUB_ID must be configured.",
+                message: "NOT_AUTHORIZED: OWNER_EMAIL must be configured.",
               });
             }
-            const ownerAccount = await db.orm
-              .select({ accountId: schema.account.accountId })
-              .from(schema.account)
-              .where(
-                and(
-                  eq(schema.account.userId, session.user.id),
-                  eq(schema.account.providerId, "github"),
-                ),
-              )
+            const ownerUser = await db.orm
+              .select({ email: schema.user.email })
+              .from(schema.user)
+              .where(eq(schema.user.id, session.user.id))
               .get();
-            if (ownerAccount === undefined || ownerAccount.accountId !== configuredOwnerGithubId) {
+            if (
+              ownerUser === undefined ||
+              normalizeOwnerEmail(ownerUser.email) !== configuredOwnerEmail ||
+              normalizeOwnerEmail(session.user.email) !== configuredOwnerEmail
+            ) {
               throw new APIError("FORBIDDEN", {
                 message:
                   "NOT_AUTHORIZED: Only the configured single owner may approve OAuth consent.",
@@ -581,19 +673,24 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
   const normalizedBaseUrl = config.baseUrl.trim().replace(/\/+$/, "");
   const trustedOrigins = [...parseTrustedOrigins(normalizedBaseUrl, config.trustedOrigins)];
   const nowFn = config.now ?? (() => Date.now());
-  const configuredOwnerGithubId = config.ownerGithubId?.trim() ?? "";
+  const configuredOwnerEmail = normalizeOwnerEmail(config.ownerEmail);
   const mcpResourceUrl = `${baseOrigin}/api/mcp`;
+  const rpID = new URL(baseOrigin).hostname;
 
-  const githubEnabled =
-    config.githubClientId !== undefined &&
-    config.githubClientId.trim() !== "" &&
-    config.githubClientSecret !== undefined &&
-    config.githubClientSecret.trim() !== "";
-
+  const ownerBoundaryPlugin = createOwnerAuthBoundaryPlugin(db, configuredOwnerEmail);
   const mcpOAuthEnabled = config.enableMcpOAuth !== false;
   const plugins = mcpOAuthEnabled
     ? [
         jwt(),
+        passkey({
+          rpID,
+          rpName: "bot-board",
+          origin: trustedOrigins,
+          authenticatorSelection: {
+            residentKey: "required",
+            userVerification: "preferred",
+          },
+        }),
         mcp({
           loginPage: "/sign-in",
           consentPage: "/consent",
@@ -603,9 +700,10 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
           allowUnauthenticatedClientRegistration: true,
           scopes: ["openid", "profile", "email", "offline_access", ...BOT_SCOPES],
         }),
-        createBotConnectionConsentPlugin(db, configuredOwnerGithubId, nowFn),
+        ownerBoundaryPlugin,
+        createBotConnectionConsentPlugin(db, configuredOwnerEmail, nowFn),
       ]
-    : [jwt()];
+    : [jwt(), ownerBoundaryPlugin];
 
   const auth = betterAuth({
     baseURL: normalizedBaseUrl,
@@ -632,39 +730,22 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
       transaction: false,
     }),
     emailAndPassword: {
-      enabled: false,
+      enabled: true,
+      minPasswordLength: 12,
+      maxPasswordLength: 128,
+      autoSignIn: true,
     },
-    ...(githubEnabled
-      ? {
-          socialProviders: {
-            github: {
-              clientId: config.githubClientId ?? "",
-              clientSecret: config.githubClientSecret ?? "",
-              mapProfileToUser(profile) {
-                assertAllowedOwnerGithubProfile({
-                  configuredOwnerGithubId,
-                  githubAccountId: String(profile.id),
-                });
-                return {
-                  name: profile.name || profile.login,
-                  email: profile.email,
-                  image: profile.avatar_url,
-                };
-              },
-            },
-          },
-        }
-      : {}),
     databaseHooks: {
       user: {
         create: {
           async before(newUser) {
-            if (configuredOwnerGithubId === "") {
+            if (!isValidOwnerEmail(configuredOwnerEmail)) {
               throw new APIError("FORBIDDEN", {
                 code: "NOT_AUTHORIZED",
-                message: "NOT_AUTHORIZED: OWNER_GITHUB_ID must be configured before signup.",
+                message: "NOT_AUTHORIZED: OWNER_EMAIL is not configured.",
               });
             }
+            // Check single-owner lock BEFORE comparing email (uniform 403 post-bootstrap; M1)
             const existingUser = await db.orm
               .select({ id: schema.user.id })
               .from(schema.user)
@@ -676,7 +757,16 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
                 message: "NOT_AUTHORIZED: Single-owner workspace forbids additional signups.",
               });
             }
-            return { data: newUser };
+            assertAllowedOwnerEmail({
+              configuredOwnerEmail,
+              candidateEmail: newUser.email,
+            });
+            return {
+              data: {
+                ...newUser,
+                email: configuredOwnerEmail,
+              },
+            };
           },
           async after(createdUser) {
             await ensureOwnerWorkspace(db, createdUser.id, nowFn());
@@ -685,41 +775,55 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
       },
       account: {
         create: {
-          before(newAccount) {
-            if (newAccount.providerId !== "github") {
+          async before(newAccount) {
+            if (newAccount.providerId !== "credential") {
               throw new APIError("FORBIDDEN", {
                 code: "NOT_AUTHORIZED",
-                message: "NOT_AUTHORIZED: Only GitHub OAuth accounts are permitted.",
+                message: "NOT_AUTHORIZED: Only credential accounts are permitted.",
               });
             }
-            assertAllowedOwnerGithubProfile({
-              configuredOwnerGithubId,
-              githubAccountId: newAccount.accountId,
-            });
-            return Promise.resolve({ data: newAccount });
+            if (!isValidOwnerEmail(configuredOwnerEmail)) {
+              throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
+                message: "NOT_AUTHORIZED: OWNER_EMAIL must be configured.",
+              });
+            }
+            const userRow = await db.orm
+              .select({ email: schema.user.email })
+              .from(schema.user)
+              .where(eq(schema.user.id, newAccount.userId))
+              .get();
+            if (
+              userRow === undefined ||
+              normalizeOwnerEmail(userRow.email) !== configuredOwnerEmail
+            ) {
+              throw new APIError("FORBIDDEN", {
+                code: "NOT_AUTHORIZED",
+                message: "NOT_AUTHORIZED: Account creation denied for non-owner user.",
+              });
+            }
+            return { data: newAccount };
           },
         },
       },
       session: {
         create: {
           async before(newSession) {
-            if (configuredOwnerGithubId === "") {
+            if (!isValidOwnerEmail(configuredOwnerEmail)) {
               throw new APIError("FORBIDDEN", {
                 code: "NOT_AUTHORIZED",
-                message: "NOT_AUTHORIZED: OWNER_GITHUB_ID must be configured.",
+                message: "NOT_AUTHORIZED: OWNER_EMAIL must be configured.",
               });
             }
-            const ownerAccount = await db.orm
-              .select({ accountId: schema.account.accountId })
-              .from(schema.account)
-              .where(
-                and(
-                  eq(schema.account.userId, newSession.userId),
-                  eq(schema.account.providerId, "github"),
-                ),
-              )
+            const ownerUser = await db.orm
+              .select({ email: schema.user.email })
+              .from(schema.user)
+              .where(eq(schema.user.id, newSession.userId))
               .get();
-            if (ownerAccount === undefined || ownerAccount.accountId !== configuredOwnerGithubId) {
+            if (
+              ownerUser === undefined ||
+              normalizeOwnerEmail(ownerUser.email) !== configuredOwnerEmail
+            ) {
               throw new APIError("FORBIDDEN", {
                 code: "NOT_AUTHORIZED",
                 message: "NOT_AUTHORIZED: Session creation denied for non-owner account.",
@@ -771,35 +875,29 @@ export function createBetterAuth(db: AppDatabase, config: BetterAuthConfig) {
   return {
     async handler(request: Request): Promise<Response> {
       const reqUrl = new URL(request.url);
-      const response = await auth.handler(request);
       if (
-        request.method === "GET" &&
-        reqUrl.pathname.startsWith("/api/auth/callback/") &&
-        response.status === 403
+        reqUrl.pathname === "/api/auth/owner-status" &&
+        (request.method === "GET" || request.method === "HEAD")
       ) {
-        const redirectHeaders = new Headers({
-          Location: `${baseOrigin}/sign-in?error=NOT_AUTHORIZED`,
-          "Cache-Control": "no-store",
-        });
-        const setCookies =
-          typeof response.headers.getSetCookie === "function"
-            ? response.headers.getSetCookie()
-            : [];
-        if (setCookies.length > 0) {
-          for (const cookie of setCookies) {
-            redirectHeaders.append("Set-Cookie", cookie);
-          }
-        } else {
-          const singleCookie = response.headers.get("set-cookie");
-          if (singleCookie !== null) {
-            redirectHeaders.append("Set-Cookie", singleCookie);
-          }
-        }
-        return new Response(null, {
-          status: 302,
-          headers: redirectHeaders,
+        const existingUser = await db.orm
+          .select({ id: schema.user.id })
+          .from(schema.user)
+          .limit(1)
+          .get();
+        const body =
+          request.method === "HEAD"
+            ? null
+            : JSON.stringify({ initialized: existingUser !== undefined });
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+          },
         });
       }
+
+      const response = await auth.handler(request);
       if (
         response.status === 404 &&
         mcpOAuthEnabled &&
